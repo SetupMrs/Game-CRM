@@ -18,12 +18,14 @@ import {
   Users,
   Bell,
   Search,
-  Trash2
+  Trash2,
+  ShieldCheck
 } from "lucide-react";
 import { Task, Transaction, DatabaseState, Supplier, ProductCard, TeamMember, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId } from "./utils";
-import { apiFetch, checkAuthStatus, getToken, logout, AUTH_REQUIRED_EVENT } from "./apiClient";
+import { apiFetch, fetchCurrentUser, logout, AppUser, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
+import UsersManager from "./components/UsersManager";
 import TrashBin from "./components/TrashBin";
 
 // Each tab is its own chunk, loaded only when the user opens it. These four
@@ -286,9 +288,11 @@ export default function App() {
   };
 
 
-  // Auth gate: null = still checking, true = need to show login screen
-  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  // Auth gate — the app always requires a real account now (no "open" mode).
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
+  const [isUsersManagerOpen, setIsUsersManagerOpen] = useState(false);
 
   // Auto-dismiss backup status toasts
   useEffect(() => {
@@ -370,22 +374,22 @@ export default function App() {
     }
   };
 
-  // Resolve auth requirement first; only load data once authenticated (or auth isn't required).
+  // Auth is now always required — the app renders nothing but the login form
+  // until the stored token proves to be a valid session for a real account.
   useEffect(() => {
     const init = async () => {
-      const required = await checkAuthStatus();
-      setAuthRequired(required);
-      if (!required || getToken()) {
+      const user = await fetchCurrentUser();
+      if (user) {
+        setAppUser(user);
         setIsAuthenticated(true);
-      } else {
-        setIsLoading(false);
       }
+      setIsCheckingSession(false);
     };
     init();
 
     const handleAuthRequired = () => {
       setIsAuthenticated(false);
-      setAuthRequired(true);
+      setAppUser(null);
     };
     window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
@@ -400,6 +404,7 @@ export default function App() {
   const handleLogout = async () => {
     await logout();
     setIsAuthenticated(false);
+    setAppUser(null);
   };
 
   // Universal State Update & Disk Save (server first, local cache as backup)
@@ -1143,8 +1148,8 @@ export default function App() {
       .map(s => ({ ...s, products: (s.products || []).filter(p => !p.deletedAt) }));
   }, [db.suppliers]);
 
-  // Still resolving whether a password is required
-  if (authRequired === null) {
+  // Still resolving whether the stored session token is valid
+  if (isCheckingSession) {
     return (
       <div className="min-h-screen bg-[#0A0A0B] flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
@@ -1152,8 +1157,16 @@ export default function App() {
     );
   }
 
-  if (authRequired && !isAuthenticated) {
-    return <LoginGate onSuccess={() => setIsAuthenticated(true)} />;
+  if (!isAuthenticated) {
+    return (
+      <LoginGate
+        onSuccess={async () => {
+          const user = await fetchCurrentUser();
+          setAppUser(user);
+          setIsAuthenticated(true);
+        }}
+      />
+    );
   }
 
   return (
@@ -1290,19 +1303,37 @@ export default function App() {
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
 
-            {/* Logout, only shown when the server requires a password */}
-            {authRequired && (
+            {/* Logged-in account (username + role), and user management for admins */}
+            {appUser && (
               <button
-                onClick={handleLogout}
-                className="p-1.5 sm:p-2 hover:bg-[#1A1A1C] text-gray-400 hover:text-white rounded-lg transition-colors border border-white/5 cursor-pointer"
-                title="Вийти"
+                onClick={() => appUser.role === "admin" && setIsUsersManagerOpen(true)}
+                className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/5 text-xs ${
+                  appUser.role === "admin" ? "bg-[#1A1A1C] hover:bg-white/5 cursor-pointer" : "bg-[#1A1A1C] cursor-default"
+                }`}
+                title={appUser.role === "admin" ? "Керування користувачами" : undefined}
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <ShieldCheck className={`w-3.5 h-3.5 ${appUser.role === "admin" ? "text-emerald-400" : "text-blue-400"}`} />
+                <span className="text-gray-200">{appUser.username}</span>
+                <span className="text-gray-500">· {appUser.role === "admin" ? "адмін" : "саппорт"}</span>
               </button>
             )}
+
+            {/* Logout */}
+            <button
+              onClick={handleLogout}
+              className="p-1.5 sm:p-2 hover:bg-[#1A1A1C] text-gray-400 hover:text-white rounded-lg transition-colors border border-white/5 cursor-pointer"
+              title="Вийти"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </header>
+
+      {/* User management modal (admin only) */}
+      {isUsersManagerOpen && appUser?.role === "admin" && (
+        <UsersManager currentUserId={appUser.id} onClose={() => setIsUsersManagerOpen(false)} />
+      )}
 
       {/* Main Container */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-5 space-y-5">
