@@ -6,6 +6,13 @@
 
 ---
 
+## Виправлення PM2-конфігу (ecosystem.config.js → .cjs)
+
+**Виправлено**
+- `package.json` містить `"type": "module"`, через що Node.js намагався трактувати `ecosystem.config.js` як сучасний ES-модуль і падав з помилкою `ReferenceError: module is not defined in ES module scope` при `pm2 start`. Перейменовано файл у `ecosystem.config.cjs` (розширення `.cjs` явно каже Node.js обробляти файл по-старому, як CommonJS) — тепер `pm2 start ecosystem.config.cjs` працює без помилок. Оновлено `deploy.sh` та `README.md` відповідно.
+
+---
+
 ## Git-деплой та скрипт оновлення
 
 **Додано**

@@ -1,5 +1,5 @@
 // PM2 process manager config.
-// Start once with:   pm2 start ecosystem.config.js
+// Start once with:   pm2 start ecosystem.config.cjs
 // Then just restart:  pm2 restart game-crm
 module.exports = {
   apps: [

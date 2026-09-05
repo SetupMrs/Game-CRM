@@ -16,7 +16,7 @@ echo "==> Перезапускаю сервер через PM2..."
 if pm2 describe game-crm > /dev/null 2>&1; then
   pm2 restart game-crm
 else
-  pm2 start ecosystem.config.js
+  pm2 start ecosystem.config.cjs
 fi
 
 echo ""
