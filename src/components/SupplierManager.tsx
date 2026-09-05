@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { 
   Truck, 
   User, 
@@ -538,6 +538,10 @@ export default function SupplierManager({
   // Catalog-specific filter: All, Added (Додані), Not Added (Не додані)
   const [catalogFilter, setCatalogFilter] = useState<"All" | "Added" | "NotAdded">("All");
   const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
+  // Large synced catalogs can have thousands of products — rendering them
+  // all as animated DOM pills at once makes the whole page janky/slow, so
+  // we only render a page at a time and let the user load more on demand.
+  const [visibleProductsCount, setVisibleProductsCount] = useState(60);
 
   // Track which supplier requires deletion confirmation
   const [supplierDeleteConfirmId, setSupplierDeleteConfirmId] = useState<string | null>(null);
@@ -966,6 +970,17 @@ export default function SupplierManager({
       return matchesCategory || matchesItems;
     });
   }, [selectedSupplier, catalogFilter, catalogSearchQuery]);
+
+  // Reset pagination whenever the filters/search or the selected supplier
+  // change, so switching context always starts back at the top of the list.
+  useEffect(() => {
+    setVisibleProductsCount(60);
+  }, [selectedSupplierId, catalogFilter, catalogSearchQuery]);
+
+  const paginatedProducts = useMemo(
+    () => displayedProducts.slice(0, visibleProductsCount),
+    [displayedProducts, visibleProductsCount]
+  );
 
   // Unique list of currencies in selected supplier
   const supplierCurrenciesCount = useMemo(() => {
@@ -1649,7 +1664,7 @@ export default function SupplierManager({
                 ) : (
                   <div className="flex flex-wrap gap-2.5 pt-1.5">
                     <AnimatePresence>
-                      {displayedProducts.map((prod) => {
+                      {paginatedProducts.map((prod) => {
                         const isAdded = prod.isAdded;
                         const matchingItems = catalogSearchQuery.trim()
                           ? (prod.items || []).filter(item => 
@@ -1983,6 +1998,17 @@ export default function SupplierManager({
                         );
                       })}
                     </AnimatePresence>
+                  </div>
+                )}
+
+                {displayedProducts.length > visibleProductsCount && (
+                  <div className="flex flex-col items-center gap-1.5 pt-3">
+                    <button
+                      onClick={() => setVisibleProductsCount(c => c + 60)}
+                      className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 rounded-lg text-xs font-semibold cursor-pointer"
+                    >
+                      Показати ще ({displayedProducts.length - visibleProductsCount} лишилось)
+                    </button>
                   </div>
                 )}
               </div>
