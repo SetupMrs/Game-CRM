@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import Database from "better-sqlite3";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 
@@ -89,27 +90,34 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   res.status(401).json({ status: "error", message: "Потрібна авторизація." });
 }
 
-// File-based local Database path
+// ---------------------------------------------------------------------------
+// Database (SQLite)
+// ---------------------------------------------------------------------------
+// Each top-level collection (tasks, transactions, suppliers, ...) gets its
+// own table, keyed by id, with the full record stored as a JSON blob. This
+// keeps the record shape flexible (tasks/suppliers have many optional nested
+// fields) while still getting SQLite's real benefits over a single flat
+// file: atomic transactional writes (no more "half-written" file if the
+// process is killed mid-save), and a foundation to add indexed columns
+// later if querying performance ever matters at a larger scale.
 const DB_DIR = path.join(process.cwd(), "data");
-const DB_FILE = path.join(DB_DIR, "crm_srm_db.json");
+const DB_PATH = path.join(DB_DIR, "game_crm.sqlite");
+const LEGACY_JSON_PATH = path.join(DB_DIR, "crm_srm_db.json"); // old file-based DB, migrated once
 
-// Default seed data is now empty to support clean start
 const DEFAULT_CURRENCY_RATES = { USD: 1, RUB: 0.0105, UAH: 0.024 };
 const DEFAULT_BASE_CURRENCY = "USD";
 
-const DEFAULT_DB = {
-  tasks: [],
-  transactions: [],
-  suppliers: [],
-  teamMembers: [],
-  activityLog: [],
-  budgets: [],
-  taskTemplates: [],
-  baseCurrency: DEFAULT_BASE_CURRENCY,
-  currencyRates: DEFAULT_CURRENCY_RATES
-};
-
 const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "teamMembers", "activityLog", "budgets", "taskTemplates"] as const;
+
+const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
+  tasks: "tasks",
+  transactions: "transactions",
+  suppliers: "suppliers",
+  teamMembers: "team_members",
+  activityLog: "activity_log",
+  budgets: "budgets",
+  taskTemplates: "task_templates"
+};
 
 function normalizeCurrencyRates(value: any, baseCurrency: string): Record<string, number> {
   const rates: Record<string, number> = { [baseCurrency]: 1 };
@@ -131,88 +139,97 @@ function normalizeBaseCurrency(value: any): string {
   return DEFAULT_BASE_CURRENCY;
 }
 
-// Initialize file database
-function initDatabase() {
-  try {
-    if (!fs.existsSync(DB_DIR)) {
-      fs.mkdirSync(DB_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(DEFAULT_DB, null, 2), "utf8");
-      console.log("Database file created successfully.");
-    } else {
-      // Validate that DB matches current schema
-      const raw = fs.readFileSync(DB_FILE, "utf8");
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch (e) {
-        data = {};
-      }
-      // Guarantee properties exist (handles upgrades from older DB files too)
-      let updated = false;
-      for (const key of DB_ARRAY_KEYS) {
-        if (!Array.isArray(data[key])) {
-          data[key] = [];
-          updated = true;
-        }
-      }
-      if (!data.currencyRates || typeof data.currencyRates !== "object") {
-        data.currencyRates = { ...DEFAULT_CURRENCY_RATES };
-        updated = true;
-      }
-      if (!data.baseCurrency || typeof data.baseCurrency !== "string") {
-        data.baseCurrency = DEFAULT_BASE_CURRENCY;
-        updated = true;
-      }
-      if (updated) {
-        fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
-        console.log("Database migrated to include any newly added collections.");
-      }
-    }
-  } catch (error) {
-    console.error("Error initializing database:", error);
-  }
+if (!fs.existsSync(DB_DIR)) {
+  fs.mkdirSync(DB_DIR, { recursive: true });
 }
 
-initDatabase();
+const sqlite = new Database(DB_PATH);
+sqlite.pragma("journal_mode = WAL"); // safer + faster concurrent reads/writes
 
-// Load DB
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS team_members (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS activity_log (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS task_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+`);
+
+// Load DB — reconstructs the same DatabaseState shape the frontend has
+// always received, just sourced from SQLite tables instead of one big file.
 function readDb() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const content = fs.readFileSync(DB_FILE, "utf8");
-      const db = JSON.parse(content);
-      for (const key of DB_ARRAY_KEYS) {
-        db[key] = Array.isArray(db[key]) ? db[key] : [];
-      }
-      db.baseCurrency = normalizeBaseCurrency(db.baseCurrency);
-      db.currencyRates = normalizeCurrencyRates(db.currencyRates, db.baseCurrency);
-      return db;
-    }
-  } catch (error) {
-    console.error("Error reading database file, returning default schema", error);
+  const result: any = {};
+  for (const key of DB_ARRAY_KEYS) {
+    const table = TABLE_BY_KEY[key];
+    const rows = sqlite.prepare(`SELECT data FROM ${table}`).all() as { data: string }[];
+    result[key] = rows.map(r => {
+      try { return JSON.parse(r.data); } catch { return null; }
+    }).filter(Boolean);
   }
-  const defaultClone = JSON.parse(JSON.stringify(DEFAULT_DB));
-  return defaultClone;
+  const baseCurrencyRow = sqlite.prepare("SELECT value FROM settings WHERE key = 'baseCurrency'").get() as { value: string } | undefined;
+  const currencyRatesRow = sqlite.prepare("SELECT value FROM settings WHERE key = 'currencyRates'").get() as { value: string } | undefined;
+  result.baseCurrency = normalizeBaseCurrency(baseCurrencyRow?.value);
+  result.currencyRates = normalizeCurrencyRates(
+    currencyRatesRow ? JSON.parse(currencyRatesRow.value) : null,
+    result.baseCurrency
+  );
+  return result;
 }
 
-// Write DB
-function writeDb(data: any) {
-  try {
-    const cleanData: any = {};
-    for (const key of DB_ARRAY_KEYS) {
-      cleanData[key] = Array.isArray(data[key]) ? data[key] : [];
+// Save DB — replaces the full contents of every table inside one atomic
+// transaction (so a crash mid-write can never leave a half-updated database).
+const writeDbTxn = sqlite.transaction((data: any) => {
+  for (const key of DB_ARRAY_KEYS) {
+    const table = TABLE_BY_KEY[key];
+    sqlite.prepare(`DELETE FROM ${table}`).run();
+    const insert = sqlite.prepare(`INSERT INTO ${table} (id, data) VALUES (?, ?)`);
+    const items = Array.isArray(data[key]) ? data[key] : [];
+    for (const item of items) {
+      if (!item || typeof item.id !== "string") continue;
+      insert.run(item.id, JSON.stringify(item));
     }
-    cleanData.baseCurrency = normalizeBaseCurrency(data.baseCurrency);
-    cleanData.currencyRates = normalizeCurrencyRates(data.currencyRates, cleanData.baseCurrency);
-    fs.writeFileSync(DB_FILE, JSON.stringify(cleanData, null, 2), "utf8");
+  }
+  const baseCurrency = normalizeBaseCurrency(data.baseCurrency);
+  const currencyRates = normalizeCurrencyRates(data.currencyRates, baseCurrency);
+  sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('baseCurrency', ?)").run(baseCurrency);
+  sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('currencyRates', ?)").run(JSON.stringify(currencyRates));
+});
+
+function writeDb(data: any): boolean {
+  try {
+    writeDbTxn(data);
     return true;
   } catch (error) {
-    console.error("Error writing to database file", error);
+    console.error("Error writing to SQLite database", error);
     return false;
   }
 }
+
+// One-time migration: if an old data/crm_srm_db.json file exists (from
+// before the SQLite switch) and the SQLite database is still empty, import
+// it automatically so nobody's existing data gets lost by the upgrade.
+function migrateLegacyJsonIfNeeded() {
+  const alreadyMigrated = sqlite.prepare("SELECT value FROM settings WHERE key = 'migratedFromJson'").get();
+  if (alreadyMigrated) return;
+
+  if (fs.existsSync(LEGACY_JSON_PATH)) {
+    try {
+      const raw = fs.readFileSync(LEGACY_JSON_PATH, "utf8");
+      const data = JSON.parse(raw);
+      writeDb(data);
+      const renamedPath = `${LEGACY_JSON_PATH}.migrated`;
+      fs.renameSync(LEGACY_JSON_PATH, renamedPath);
+      console.log(`Migrated existing data/crm_srm_db.json into SQLite (renamed old file to ${path.basename(renamedPath)}).`);
+    } catch (error) {
+      console.error("Legacy JSON migration failed, starting with an empty database:", error);
+    }
+  }
+  sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('migratedFromJson', '1')").run();
+}
+
+migrateLegacyJsonIfNeeded();
 
 // REST API Endpoints
 
