@@ -199,6 +199,12 @@ export interface ProductCard {
   platform?: string;
   priceHistory?: PriceHistoryEntry[]; // попередні ціни, найновіша перша
   deletedAt?: string; // якщо задано — товар у кошику, не показується в основних списках
+  // --- Синхронізація із зовнішнім API постачальника (напр. LetsKeys) ---
+  externalSource?: string; // напр. "letskeys"
+  externalProductId?: string; // id "гри/сервісу" у постачальника
+  externalVariationId?: string; // id конкретної варіації (те, що реально продається)
+  externalInStock?: boolean; // наявність за даними постачальника (не плутати з items[].status)
+  lastSyncedAt?: string; // ISO — коли востаннє підтягнуто дані з API
 }
 
 export interface Supplier {
@@ -211,6 +217,7 @@ export interface Supplier {
   isClosed: boolean;
   products: ProductCard[];
   deletedAt?: string; // якщо задано — постачальник у кошику
+  letsKeysLinked?: boolean; // якщо true — показується кнопка синхронізації з LetsKeys
 }
 
 // --- Assignable users (real accounts, used for "who is responsible") ---

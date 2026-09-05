@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { Task, Transaction, DatabaseState, Supplier, ProductCard, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate } from "./utils";
-import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, AUTH_REQUIRED_EVENT } from "./apiClient";
+import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
 import UsersManager from "./components/UsersManager";
 import TrashBin from "./components/TrashBin";
@@ -845,6 +845,23 @@ export default function App() {
     ));
   };
 
+  const handleToggleSupplierLetsKeysLink = (supId: string) => {
+    const supplier = (db.suppliers || []).find(s => s.id === supId);
+    const updated = {
+      ...db,
+      suppliers: (db.suppliers || []).map(s =>
+        s.id === supId ? { ...s, letsKeysLinked: !s.letsKeysLinked } : s
+      )
+    };
+    saveStateToDisk(withLog(
+      updated,
+      "Змінив прив'язку до LetsKeys",
+      "supplier",
+      supplier?.name || supId,
+      supplier?.letsKeysLinked ? "Відв'язано" : "Прив'язано"
+    ));
+  };
+
   const handleDeleteSupplier = (supId: string) => {
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
@@ -1001,6 +1018,79 @@ export default function App() {
       })
     };
     saveStateToDisk(withLog(updated, "Остаточно видалив товар", "product", prod?.title || prodId));
+  };
+
+  // Imports/updates products from a LetsKeys "variations" response into a
+  // supplier's product list, matching by externalVariationId so re-running
+  // this later updates prices (recording history) instead of duplicating.
+  const handleImportLetsKeysVariations = (
+    supplierId: string,
+    productId: number,
+    variations: LetsKeysVariation[]
+  ): { addedCount: number; updatedCount: number; priceChangedCount: number } => {
+    const supplier = db.suppliers.find(s => s.id === supplierId);
+    if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
+
+    let addedCount = 0;
+    let updatedCount = 0;
+    let priceChangedCount = 0;
+    const now = new Date().toISOString();
+
+    const existingByExternalId: Record<string, ProductCard> = {};
+    supplier.products.forEach(p => {
+      if (p.externalVariationId) existingByExternalId[p.externalVariationId] = p;
+    });
+
+    const updatedProducts = [...supplier.products];
+
+    variations.forEach(v => {
+      const extId = String(v.id);
+      const existing = existingByExternalId[extId];
+
+      if (existing) {
+        let finalProd: ProductCard = { ...existing, externalInStock: v.in_stock, lastSyncedAt: now };
+        if (typeof existing.price === "number" && existing.price !== v.price) {
+          const historyEntry: PriceHistoryEntry = {
+            id: generateId("price"),
+            price: existing.price,
+            currency: existing.currency,
+            changedAt: now
+          };
+          finalProd.priceHistory = [historyEntry, ...(existing.priceHistory || [])].slice(0, 50);
+          priceChangedCount++;
+        }
+        finalProd.price = v.price;
+        const idx = updatedProducts.findIndex(p => p.id === existing.id);
+        updatedProducts[idx] = finalProd;
+        updatedCount++;
+      } else {
+        const newProd: ProductCard = {
+          id: generateId("prod"),
+          title: v.name,
+          price: v.price,
+          currency: v.region, // "currency" field doubles as region tag app-wide
+          externalSource: "letskeys",
+          externalProductId: String(productId),
+          externalVariationId: extId,
+          externalInStock: v.in_stock,
+          lastSyncedAt: now
+        };
+        updatedProducts.push(newProd);
+        addedCount++;
+      }
+    });
+
+    const updatedSuppliers = db.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
+    const updated = { ...db, suppliers: updatedSuppliers };
+    saveStateToDisk(withLog(
+      updated,
+      "Синхронізував товари з LetsKeys",
+      "product",
+      supplier.name,
+      `Додано: ${addedCount}, оновлено: ${updatedCount}, зміна ціни: ${priceChangedCount}`
+    ));
+
+    return { addedCount, updatedCount, priceChangedCount };
   };
 
   const handleToggleProductAdded = (supId: string, prodId: string) => {
@@ -1545,12 +1635,14 @@ export default function App() {
                     tasks={visibleTasks}
                     onAddSupplier={handleAddSupplier}
                     onToggleSupplierStatus={handleToggleSupplierStatus}
+                    onToggleSupplierLetsKeysLink={handleToggleSupplierLetsKeysLink}
                     onDeleteSupplier={handleDeleteSupplier}
                     onAddProduct={handleAddProduct}
                     onAddProducts={handleAddProducts}
                     onUpdateProduct={handleUpdateProduct}
                     onDeleteProduct={handleDeleteProduct}
                     onToggleProductAdded={handleToggleProductAdded}
+                    onImportLetsKeysVariations={handleImportLetsKeysVariations}
                     onAddTask={handleAddTask}
                     onUpdateTask={handleUpdateTask}
                   />

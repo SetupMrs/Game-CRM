@@ -450,6 +450,79 @@ migrateLegacyJsonIfNeeded();
 
 // REST API Endpoints
 
+// ---------------------------------------------------------------------------
+// LetsKeys supplier catalog proxy
+// ---------------------------------------------------------------------------
+// The frontend never sees the LetsKeys API key — it always calls our own
+// server, which attaches the key server-side and forwards the request. This
+// also lets us keep a short in-memory cache of the (large, rarely-changing)
+// products list so we don't hammer their API every time someone searches.
+const LETSKEYS_BASE_URL = "https://letskeys.com/api/v1";
+let letsKeysProductsCache: { data: any; fetchedAt: number } | null = null;
+const LETSKEYS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function getLetsKeysApiKey(): string | null {
+  const key = process.env.LETSKEYS_API_KEY;
+  return key && key.trim() ? key.trim() : null;
+}
+
+app.get("/api/suppliers/letskeys/products", requireAuth, async (req, res) => {
+  const apiKey = getLetsKeysApiKey();
+  if (!apiKey) {
+    return res.status(400).json({ status: "error", message: "LETSKEYS_API_KEY не налаштовано в .env на сервері." });
+  }
+
+  if (letsKeysProductsCache && Date.now() - letsKeysProductsCache.fetchedAt < LETSKEYS_CACHE_TTL_MS) {
+    return res.json({ status: "success", products: letsKeysProductsCache.data });
+  }
+
+  try {
+    const response = await fetch(`${LETSKEYS_BASE_URL}/catalog/products`, {
+      headers: { "X-API-Key": apiKey }
+    });
+    if (!response.ok) {
+      return res.status(502).json({ status: "error", message: `LetsKeys повернув помилку: ${response.status}` });
+    }
+    const data = await response.json();
+    letsKeysProductsCache = { data, fetchedAt: Date.now() };
+    res.json({ status: "success", products: data });
+  } catch (error) {
+    console.error("LetsKeys products fetch failed:", error);
+    res.status(502).json({ status: "error", message: "Не вдалося з'єднатися з LetsKeys." });
+  }
+});
+
+app.get("/api/suppliers/letskeys/variations", requireAuth, async (req, res) => {
+  const apiKey = getLetsKeysApiKey();
+  if (!apiKey) {
+    return res.status(400).json({ status: "error", message: "LETSKEYS_API_KEY не налаштовано в .env на сервері." });
+  }
+
+  const productId = String(req.query.productId || "").trim();
+  const region = String(req.query.region || "").trim();
+  if (!productId || !region) {
+    return res.status(400).json({ status: "error", message: "Потрібні productId і region." });
+  }
+  // Basic sanity check — these go straight into a URL path.
+  if (!/^[a-zA-Z0-9_-]+$/.test(productId) || !/^[a-zA-Z0-9_-]+$/.test(region)) {
+    return res.status(400).json({ status: "error", message: "Невірний формат productId або region." });
+  }
+
+  try {
+    const response = await fetch(`${LETSKEYS_BASE_URL}/catalog/product/${encodeURIComponent(productId)}/region/${encodeURIComponent(region)}`, {
+      headers: { "X-API-Key": apiKey }
+    });
+    if (!response.ok) {
+      return res.status(502).json({ status: "error", message: `LetsKeys повернув помилку: ${response.status}` });
+    }
+    const data = await response.json();
+    res.json({ status: "success", ...data });
+  } catch (error) {
+    console.error("LetsKeys variations fetch failed:", error);
+    res.status(502).json({ status: "error", message: "Не вдалося з'єднатися з LetsKeys." });
+  }
+});
+
 // Basic shape validation to avoid a bad client request corrupting the DB file.
 function isValidDbShape(data: any): boolean {
   if (!data || typeof data !== "object") return false;

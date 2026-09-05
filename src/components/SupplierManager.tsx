@@ -21,23 +21,29 @@ import {
   Database,
   Copy,
   Check,
-  Settings
+  Settings,
+  RefreshCw,
+  Package
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Supplier, ProductCard, Task, CategoryItem } from "../types";
 import { generateId, formatDate } from "../utils";
+import { fetchLetsKeysProducts, fetchLetsKeysVariations, LetsKeysProduct, LetsKeysVariation } from "../apiClient";
+import LetsKeysSyncModal from "./LetsKeysSyncModal";
 
 interface SupplierManagerProps {
   suppliers: Supplier[];
   tasks?: Task[];
   onAddSupplier: (supplier: Omit<Supplier, "id" | "isClosed" | "products">) => void;
   onToggleSupplierStatus: (id: string) => void;
+  onToggleSupplierLetsKeysLink?: (id: string) => void;
   onDeleteSupplier: (id: string) => void;
   onAddProduct: (supplierId: string, product: Omit<ProductCard, "id">) => void;
   onAddProducts?: (supplierId: string, products: Omit<ProductCard, "id">[]) => void;
   onUpdateProduct?: (supplierId: string, productId: string, product: ProductCard) => void;
   onDeleteProduct: (supplierId: string, productId: string) => void;
   onToggleProductAdded?: (supplierId: string, productId: string) => void;
+  onImportLetsKeysVariations?: (supplierId: string, productId: number, variations: LetsKeysVariation[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
   onAddTask?: (task: Omit<Task, "id">) => void;
   onUpdateTask?: (task: Task) => void;
 }
@@ -509,15 +515,19 @@ export default function SupplierManager({
   tasks = [],
   onAddSupplier,
   onToggleSupplierStatus,
+  onToggleSupplierLetsKeysLink,
   onDeleteSupplier,
   onAddProduct,
   onAddProducts,
   onUpdateProduct,
   onDeleteProduct,
   onToggleProductAdded,
+  onImportLetsKeysVariations,
   onAddTask,
   onUpdateTask
 }: SupplierManagerProps) {
+  const [isLetsKeysSyncOpen, setIsLetsKeysSyncOpen] = useState(false);
+
   // Selection and navigation
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>(() => {
     return suppliers.length > 0 ? suppliers[0].id : "";
@@ -1259,6 +1269,29 @@ export default function SupplierManager({
                   </div>
 
                   <div className="flex gap-2 shrink-0">
+                    {onToggleSupplierLetsKeysLink && (
+                      <button
+                        onClick={() => onToggleSupplierLetsKeysLink(selectedSupplier.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 border ${
+                          selectedSupplier.letsKeysLinked
+                            ? "bg-blue-600/15 border-blue-500/20 text-blue-400 hover:bg-blue-600/25"
+                            : "bg-white/[0.01] border-white/10 text-gray-500 hover:bg-white/5"
+                        }`}
+                        title="Прив'язати цього постачальника до LetsKeys для автоматичної синхронізації каталогу"
+                      >
+                        <Package className="w-3.5 h-3.5" />
+                        {selectedSupplier.letsKeysLinked ? "LetsKeys прив'язано" : "Прив'язати LetsKeys"}
+                      </button>
+                    )}
+                    {selectedSupplier.letsKeysLinked && onImportLetsKeysVariations && (
+                      <button
+                        onClick={() => setIsLetsKeysSyncOpen(true)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Синхронізувати
+                      </button>
+                    )}
                     <button
                       onClick={() => onToggleSupplierStatus(selectedSupplier.id)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
@@ -2464,6 +2497,14 @@ export default function SupplierManager({
             </div>
           </div>
         </div>
+      )}
+
+      {isLetsKeysSyncOpen && selectedSupplier && onImportLetsKeysVariations && (
+        <LetsKeysSyncModal
+          supplierId={selectedSupplier.id}
+          onClose={() => setIsLetsKeysSyncOpen(false)}
+          onImport={onImportLetsKeysVariations}
+        />
       )}
 
     </div>

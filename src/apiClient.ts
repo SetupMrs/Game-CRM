@@ -185,3 +185,44 @@ export function generateRandomPassword(): string {
   }
   return out;
 }
+
+// --- LetsKeys supplier catalog sync ----------------------------------------
+
+export interface LetsKeysProduct {
+  id: number;
+  name: string;
+  regions: string[];
+  category_type: string;
+  description?: string;
+}
+
+export interface LetsKeysVariation {
+  id: number;
+  in_stock: boolean;
+  name: string;
+  price: number;
+  region: string;
+  required_fields?: string[];
+}
+
+export async function fetchLetsKeysProducts(): Promise<{ success: boolean; products?: LetsKeysProduct[]; message?: string }> {
+  try {
+    const res = await apiFetch("/api/suppliers/letskeys/products");
+    const data = await res.json();
+    if (!res.ok) return { success: false, message: data.message };
+    return { success: true, products: data.products };
+  } catch {
+    return { success: false, message: "Не вдалося з'єднатися із сервером." };
+  }
+}
+
+export async function fetchLetsKeysVariations(productId: number, region: string): Promise<{ success: boolean; variations?: LetsKeysVariation[]; message?: string }> {
+  try {
+    const res = await apiFetch(`/api/suppliers/letskeys/variations?productId=${encodeURIComponent(String(productId))}&region=${encodeURIComponent(region)}`);
+    const data = await res.json();
+    if (!res.ok) return { success: false, message: data.message };
+    return { success: true, variations: data.variations };
+  } catch {
+    return { success: false, message: "Не вдалося з'єднатися із сервером." };
+  }
+}
