@@ -1596,6 +1596,45 @@ export default function TaskManager({
                   })()}
                 </div>
 
+                {/* Linked products — what the executor should pay attention to
+                    (e.g. "this specific code — client says it doesn't work") */}
+                {(selectedTaskForEdit.linkedProducts?.length || 0) > 0 && (
+                  <div className="space-y-2 bg-[#161618]/50 p-3 rounded-xl border border-white/5">
+                    <label className="block text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                      <Package className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Прив'язані товари — на що звернути увагу</span>
+                    </label>
+                    <div className="space-y-1.5">
+                      {selectedTaskForEdit.linkedProducts!.map((link) => (
+                        <div
+                          key={link.id}
+                          className={`flex items-start gap-2.5 px-3 py-2 rounded-lg border text-xs ${
+                            link.issueNote
+                              ? "bg-red-500/5 border-red-500/20"
+                              : "bg-[#111112] border-white/5"
+                          }`}
+                        >
+                          {link.issueNote ? (
+                            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <Package className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-white font-semibold">
+                              {link.productTitle}
+                              {link.itemCode && <span className="text-gray-400 font-mono"> · {link.itemCode}</span>}
+                            </p>
+                            <p className="text-[10px] text-gray-500">{link.supplierName}</p>
+                            {link.issueNote && (
+                              <p className="text-red-400 font-semibold mt-1">⚠ {link.issueNote}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Checklist — the actual work to do, independent of task status */}
                 <div className="space-y-3 bg-[#161618]/50 p-3 rounded-xl border border-white/5">
                   <label className="block text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
