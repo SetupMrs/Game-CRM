@@ -1654,14 +1654,16 @@ export default function App() {
         )}
       </main>
 
-      {/* Localhost Footer */}
+      {/* Footer */}
       <footer className="bg-[#0D0D0E] border-t border-white/5 py-4 mt-10 flex-shrink-0 text-gray-500">
         <div className="w-full px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-3 text-xs">
-          <p>© 2026 Game CRM. Локальне збереження на ПК (LocalStorage + JSON синхронізація).</p>
+          <p>© 2026 Game CRM. Дані зберігаються на сервері (SQLite).</p>
           <div className="flex gap-4">
-            <span className="font-mono">IP: 127.0.0.1</span>
-            <span>•</span>
-            <span className="font-semibold text-gray-400">Автономний режим</span>
+            {isOfflineMode ? (
+              <span className="font-semibold text-amber-400">Офлайн-режим — показано локальний кеш, зміни не синхронізуються</span>
+            ) : (
+              <span className="font-semibold text-emerald-400">Підключено до сервера</span>
+            )}
           </div>
         </div>
       </footer>
