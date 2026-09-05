@@ -1,0 +1,6 @@
+{
+  "name": "Game CRM",
+  "description": "A high-performance Customer and Supplier Relationship Management system with local data persistence, task checklists with voice notes and image attachments.",
+  "requestFramePermissions": ["microphone"]
+}
+
