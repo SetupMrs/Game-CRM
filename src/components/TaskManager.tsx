@@ -23,6 +23,7 @@ import {
   Filter,
   Clock,
   CheckCircle2,
+  Check,
   PlayCircle,
   Eye,
   XCircle,
@@ -67,6 +68,29 @@ const RECURRENCE_LABELS: Record<RecurrenceFrequency, string> = {
   weekly: "Щотижня",
   monthly: "Щомісяця"
 };
+
+// Shared "what's the next workflow step" helper — used both on the compact
+// task card and in the modal's execution tab, so the two stay in sync.
+function getNextStatusAction(status: TaskStatus): { label: string; nextStatus: TaskStatus } | null {
+  switch (status) {
+    case "Pending":
+      return { label: "Прийняти", nextStatus: "Accepted" };
+    case "Accepted":
+      return { label: "Почати роботу", nextStatus: "In Progress" };
+    case "In Progress":
+      return { label: "На перевірку", nextStatus: "Review" };
+    case "Review":
+      return { label: "Завершити", nextStatus: "Completed" };
+    case "Completed":
+      return { label: "Повернути в роботу", nextStatus: "In Progress" };
+    case "Cancelled":
+      return { label: "Відновити", nextStatus: "Pending" };
+    default:
+      return null;
+  }
+}
+
+const EXECUTION_STEPS: TaskStatus[] = ["Pending", "Accepted", "In Progress", "Review", "Completed"];
 
 interface TaskManagerProps {
   tasks: Task[];
@@ -251,7 +275,7 @@ export default function TaskManager({
 
   // Edit / Details Modal State
   const [selectedTaskForEdit, setSelectedTaskForEdit] = useState<Task | null>(null);
-  const [editModalTab, setEditModalTab] = useState<"details" | "chat">("details");
+  const [editModalTab, setEditModalTab] = useState<"execute" | "details" | "chat">("execute");
   const [editSubTaskInput, setEditSubTaskInput] = useState("");
 
   // Standalone Chat Modal State
@@ -484,7 +508,7 @@ export default function TaskManager({
 
   // EDIT MODAL ACTIONS
   const handleOpenEditModal = (task: Task) => {
-    setEditModalTab("details");
+    setEditModalTab("execute");
     setSelectedTaskForEdit({
       ...task,
       subTasks: task.subTasks || [],
@@ -1422,6 +1446,19 @@ export default function TaskManager({
               <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10">
                 <button
                   type="button"
+                  onClick={() => setEditModalTab("execute")}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    editModalTab === "execute"
+                      ? "bg-emerald-500 text-black shadow-xs"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Виконання</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setEditModalTab("details")}
                   className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                     editModalTab === "details"
@@ -1430,7 +1467,7 @@ export default function TaskManager({
                   }`}
                 >
                   <Bookmark className="w-3.5 h-3.5" />
-                  <span>Деталі та статус</span>
+                  <span>Редагувати</span>
                 </button>
 
                 <button
@@ -1463,7 +1500,7 @@ export default function TaskManager({
               </button>
             </div>
 
-            {/* Modal Body: Either Details Form or Discussion Chat */}
+            {/* Modal Body: Execution view, Details form, or Discussion Chat */}
             {editModalTab === "chat" ? (
               <div className="p-4 overflow-y-auto flex-1 h-full min-h-[500px] flex flex-col">
                 <TaskDiscussionChat
@@ -1474,6 +1511,173 @@ export default function TaskManager({
                   assignableUsers={assignableUsers}
                   currentUserId={currentUserId}
                 />
+              </div>
+            ) : editModalTab === "execute" ? (
+              <div className="p-6 space-y-5 overflow-y-auto flex-1">
+                {/* Task summary */}
+                <div className="space-y-1.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-base font-bold text-white leading-snug">{selectedTaskForEdit.title}</h3>
+                    <span className={`shrink-0 text-[10px] font-bold px-2 py-1 rounded-md border ${
+                      selectedTaskForEdit.priority === "High"
+                        ? "bg-red-500/10 text-red-400 border-red-500/20"
+                        : selectedTaskForEdit.priority === "Medium"
+                        ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                        : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    }`}>
+                      {selectedTaskForEdit.priority === "High" ? "Високий" : selectedTaskForEdit.priority === "Medium" ? "Середній" : "Низький"} пріоритет
+                    </span>
+                  </div>
+                  {selectedTaskForEdit.description && (
+                    <p className="text-xs text-gray-400 whitespace-pre-wrap">{selectedTaskForEdit.description}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-500 pt-1">
+                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {formatDate(selectedTaskForEdit.dueDate)}</span>
+                    {selectedTaskForEdit.counterparty && (
+                      <span className="flex items-center gap-1"><User className="w-3 h-3" /> {selectedTaskForEdit.counterparty}</span>
+                    )}
+                    {selectedTaskForEdit.assigneeId && (
+                      <span className="flex items-center gap-1">
+                        <User className="w-3 h-3" />
+                        {assignableUsers.find(u => u.id === selectedTaskForEdit.assigneeId)?.username || "Відповідальний"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Status stepper */}
+                <div className="bg-[#161618]/50 p-3.5 rounded-xl border border-white/5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    {EXECUTION_STEPS.map((step, idx) => {
+                      const currentIdx = EXECUTION_STEPS.indexOf(selectedTaskForEdit.status);
+                      const isDone = selectedTaskForEdit.status !== "Cancelled" && idx < currentIdx;
+                      const isCurrent = step === selectedTaskForEdit.status;
+                      return (
+                        <React.Fragment key={step}>
+                          <div className="flex flex-col items-center gap-1 flex-1">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 ${
+                              isCurrent
+                                ? "bg-emerald-500 border-emerald-400 text-black"
+                                : isDone
+                                ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
+                                : "bg-white/5 border-white/10 text-gray-600"
+                            }`}>
+                              {isDone ? <Check className="w-3 h-3" /> : idx + 1}
+                            </div>
+                            <span className={`text-[9px] text-center leading-tight ${isCurrent ? "text-white font-bold" : "text-gray-600"}`}>
+                              {TASK_STATUS_CONFIGS[step]?.label}
+                            </span>
+                          </div>
+                          {idx < EXECUTION_STEPS.length - 1 && (
+                            <div className={`h-0.5 flex-1 -mt-4 ${idx < currentIdx ? "bg-emerald-500/40" : "bg-white/5"}`} />
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+
+                  {selectedTaskForEdit.status === "Cancelled" ? (
+                    <div className="text-center text-xs text-gray-500 py-1">Це завдання скасовано.</div>
+                  ) : (() => {
+                    const action = getNextStatusAction(selectedTaskForEdit.status);
+                    return action ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = { ...selectedTaskForEdit, status: action.nextStatus };
+                          setSelectedTaskForEdit(updated);
+                          onSetTaskStatus?.(selectedTaskForEdit.id, action.nextStatus);
+                        }}
+                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold cursor-pointer shadow-md shadow-emerald-600/20"
+                      >
+                        {action.label} →
+                      </button>
+                    ) : null;
+                  })()}
+                </div>
+
+                {/* Checklist — the actual work to do, independent of task status */}
+                <div className="space-y-3 bg-[#161618]/50 p-3 rounded-xl border border-white/5">
+                  <label className="block text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+                    <span>Чек-лист Підпунктів Справи</span>
+                    <span className="font-mono text-[10px] text-gray-500">
+                      {selectedTaskForEdit.subTasks?.filter(s => s.completed).length || 0}/
+                      {selectedTaskForEdit.subTasks?.length || 0} виконано
+                    </span>
+                  </label>
+
+                  {/* Subtask inline adder */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={editSubTaskInput}
+                      onChange={(e) => setEditSubTaskInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSubTaskInEdit(); } }}
+                      placeholder="Створити наступний підпункт..."
+                      className="flex-1 px-3 py-1.5 text-xs border border-white/10 rounded-lg bg-white/[0.01] text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={addSubTaskInEdit}
+                      className="px-3 bg-emerald-600/30 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600/50 rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      + Додати
+                    </button>
+                  </div>
+
+                  {/* Checklist lists */}
+                  {selectedTaskForEdit.subTasks && selectedTaskForEdit.subTasks.length > 0 ? (
+                    <ul className="space-y-1.5 max-h-[240px] overflow-y-auto pr-1">
+                      {selectedTaskForEdit.subTasks.map(st => (
+                        <li key={st.id} className="flex justify-between items-center bg-[#111112] border border-white/5 rounded-lg px-3 py-2 text-xs">
+                          <label className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={st.completed}
+                              onChange={() => toggleSubTaskInEdit(st.id)}
+                              className="h-4 w-4 text-emerald-500 border-white/10 rounded-sm cursor-pointer"
+                            />
+                            <span className={`text-xs truncate ${st.completed ? "line-through text-gray-500" : "text-white"}`}>
+                              {st.title}
+                            </span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => removeSubTaskInEdit(st.id)}
+                            className="text-gray-500 hover:text-red-400 p-1 cursor-pointer shrink-0"
+                          >
+                            ✕
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-center py-3 text-gray-500 text-xs">
+                      Завдання ще не розділене на підпункти. Створіть перший вище.
+                    </p>
+                  )}
+                  <p className="text-[10px] text-gray-600">
+                    Відмітки в чек-листі не впливають на статус завдання — статус переключається окремо кнопкою вище.
+                  </p>
+                </div>
+
+                {/* Footer */}
+                <div className="flex justify-between items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditModalTab("details")}
+                    className="text-xs text-gray-500 hover:text-white underline cursor-pointer"
+                  >
+                    Редагувати деталі завдання
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTaskForEdit(null)}
+                    className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer"
+                  >
+                    Закрити
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="p-6 space-y-4 overflow-y-auto flex-1">
@@ -1606,67 +1810,9 @@ export default function TaskManager({
                   />
                 </div>
 
-                {/* Checklist details builder */}
-                <div className="space-y-3 bg-[#161618]/50 p-3 rounded-xl border border-white/5">
-                  <label className="block text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
-                    <span>Чек-лист Підпунктів Справи</span>
-                    <span className="font-mono text-[10px] text-gray-500">
-                      {selectedTaskForEdit.subTasks?.filter(s => s.completed).length || 0}/
-                      {selectedTaskForEdit.subTasks?.length || 0} виконано
-                    </span>
-                  </label>
-
-                  {/* Subtask inline adder */}
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={editSubTaskInput}
-                      onChange={(e) => setEditSubTaskInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSubTaskInEdit(); } }}
-                      placeholder="Створити наступний підпункт..."
-                      className="flex-1 px-3 py-1.5 text-xs border border-white/10 rounded-lg bg-white/[0.01] text-white"
-                    />
-                    <button
-                      type="button"
-                      onClick={addSubTaskInEdit}
-                      className="px-3 bg-emerald-600/30 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600/50 rounded-lg text-xs font-bold cursor-pointer"
-                    >
-                      + Додати
-                    </button>
-                  </div>
-
-                  {/* Checklist lists */}
-                  {selectedTaskForEdit.subTasks && selectedTaskForEdit.subTasks.length > 0 ? (
-                    <ul className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
-                      {selectedTaskForEdit.subTasks.map(st => (
-                        <li key={st.id} className="flex justify-between items-center bg-[#111112] border border-white/5 rounded-lg px-3 py-1.5 text-xs">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={st.completed}
-                              onChange={() => toggleSubTaskInEdit(st.id)}
-                              className="h-3.5 w-3.5 text-emerald-500 border-white/10 rounded-sm cursor-pointer"
-                            />
-                            <span className={`text-xs truncate ${st.completed ? "line-through text-gray-500" : "text-white"}`}>
-                              {st.title}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeSubTaskInEdit(st.id)}
-                            className="text-gray-500 hover:text-red-400 p-1 cursor-pointer"
-                          >
-                            ✕
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-center py-3 text-gray-500 text-xs">
-                      Завдання ще не розділене на підпункти. Створіть перший вище.
-                    </p>
-                  )}
-                </div>
+                <p className="text-[10px] text-gray-600 text-center">
+                  Чек-лист і зміна статусу — на вкладці «Виконання».
+                </p>
 
                 {/* Footer actions */}
                 <div className="flex justify-end gap-3 pt-3 border-t border-white/5">
@@ -1779,26 +1925,7 @@ function TaskCard({
   };
 
   // Next workflow action helper
-  const getNextStatusAction = () => {
-    switch (task.status) {
-      case "Pending":
-        return { label: "Прийняти", nextStatus: "Accepted" as TaskStatus };
-      case "Accepted":
-        return { label: "В роботу", nextStatus: "In Progress" as TaskStatus };
-      case "In Progress":
-        return { label: "На перевірку", nextStatus: "Review" as TaskStatus };
-      case "Review":
-        return { label: "Завершити", nextStatus: "Completed" as TaskStatus };
-      case "Completed":
-        return { label: "В роботу", nextStatus: "In Progress" as TaskStatus };
-      case "Cancelled":
-        return { label: "Відновити", nextStatus: "Pending" as TaskStatus };
-      default:
-        return null;
-    }
-  };
-
-  const nextAction = getNextStatusAction();
+  const nextAction = getNextStatusAction(task.status);
 
   return (
     <div
