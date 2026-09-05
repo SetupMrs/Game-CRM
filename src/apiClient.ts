@@ -207,22 +207,31 @@ export interface LetsKeysVariation {
 
 export async function fetchLetsKeysProducts(): Promise<{ success: boolean; products?: LetsKeysProduct[]; message?: string }> {
   try {
-    const res = await apiFetch("/api/suppliers/letskeys/products");
+    const res = await apiFetch("/api/suppliers/letskeys/products", { signal: AbortSignal.timeout(20000) });
     const data = await res.json();
     if (!res.ok) return { success: false, message: data.message };
     return { success: true, products: data.products };
-  } catch {
+  } catch (e: any) {
+    if (e?.name === "TimeoutError" || e?.name === "AbortError") {
+      return { success: false, message: "LetsKeys не відповів за 20 секунд — можливо, тимчасово недоступний." };
+    }
     return { success: false, message: "Не вдалося з'єднатися із сервером." };
   }
 }
 
 export async function fetchLetsKeysVariations(productId: number, region: string): Promise<{ success: boolean; variations?: LetsKeysVariation[]; message?: string }> {
   try {
-    const res = await apiFetch(`/api/suppliers/letskeys/variations?productId=${encodeURIComponent(String(productId))}&region=${encodeURIComponent(region)}`);
+    const res = await apiFetch(
+      `/api/suppliers/letskeys/variations?productId=${encodeURIComponent(String(productId))}&region=${encodeURIComponent(region)}`,
+      { signal: AbortSignal.timeout(20000) }
+    );
     const data = await res.json();
     if (!res.ok) return { success: false, message: data.message };
     return { success: true, variations: data.variations };
-  } catch {
+  } catch (e: any) {
+    if (e?.name === "TimeoutError" || e?.name === "AbortError") {
+      return { success: false, message: "LetsKeys не відповів за 20 секунд — можливо, тимчасово недоступний." };
+    }
     return { success: false, message: "Не вдалося з'єднатися із сервером." };
   }
 }

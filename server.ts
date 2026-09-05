@@ -478,7 +478,8 @@ app.get("/api/suppliers/letskeys/products", requireAuth, async (req, res) => {
 
   try {
     const response = await fetch(`${LETSKEYS_BASE_URL}/catalog/products`, {
-      headers: { "X-API-Key": apiKey }
+      headers: { "X-API-Key": apiKey },
+      signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) {
       return res.status(502).json({ status: "error", message: `LetsKeys повернув помилку: ${response.status}` });
@@ -486,9 +487,10 @@ app.get("/api/suppliers/letskeys/products", requireAuth, async (req, res) => {
     const data = await response.json();
     letsKeysProductsCache = { data, fetchedAt: Date.now() };
     res.json({ status: "success", products: data });
-  } catch (error) {
+  } catch (error: any) {
     console.error("LetsKeys products fetch failed:", error);
-    res.status(502).json({ status: "error", message: "Не вдалося з'єднатися з LetsKeys." });
+    const message = error?.name === "TimeoutError" ? "LetsKeys не відповів за 15 секунд." : "Не вдалося з'єднатися з LetsKeys.";
+    res.status(502).json({ status: "error", message });
   }
 });
 
@@ -510,16 +512,18 @@ app.get("/api/suppliers/letskeys/variations", requireAuth, async (req, res) => {
 
   try {
     const response = await fetch(`${LETSKEYS_BASE_URL}/catalog/product/${encodeURIComponent(productId)}/region/${encodeURIComponent(region)}`, {
-      headers: { "X-API-Key": apiKey }
+      headers: { "X-API-Key": apiKey },
+      signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) {
       return res.status(502).json({ status: "error", message: `LetsKeys повернув помилку: ${response.status}` });
     }
     const data = await response.json();
     res.json({ status: "success", ...data });
-  } catch (error) {
+  } catch (error: any) {
     console.error("LetsKeys variations fetch failed:", error);
-    res.status(502).json({ status: "error", message: "Не вдалося з'єднатися з LetsKeys." });
+    const message = error?.name === "TimeoutError" ? "LetsKeys не відповів за 15 секунд." : "Не вдалося з'єднатися з LetsKeys.";
+    res.status(502).json({ status: "error", message });
   }
 });
 

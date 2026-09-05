@@ -5,7 +5,7 @@ import { fetchLetsKeysProducts, fetchLetsKeysVariations, LetsKeysProduct, LetsKe
 interface LetsKeysSyncModalProps {
   supplierId: string;
   onClose: () => void;
-  onImport: (supplierId: string, productId: number, variations: LetsKeysVariation[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
+  onImport: (supplierId: string, jobs: { productId: number; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
 }
 
 interface BulkSummary {
@@ -89,31 +89,48 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
       (p.regions || []).forEach(region => jobs.push({ product: p, region }));
     });
 
-    let addedCount = 0, updatedCount = 0, priceChangedCount = 0, failedCount = 0;
+    // Accumulate every job's fetched variations locally first — we only
+    // touch shared app state / save to the server ONCE, at the very end.
+    // Calling onImport per job would mean hundreds of full-database saves
+    // (extremely slow) and a real risk of lost updates if two jobs' saves
+    // raced against each other.
+    const collected: { productId: number; variations: LetsKeysVariation[] }[] = [];
+    let failedCount = 0;
+    let completedCount = 0;
+    const CONCURRENCY = 5; // a handful of requests in flight at once, not one-by-one
 
-    for (let i = 0; i < jobs.length; i++) {
-      if (cancelRef.current) break;
-      const { product, region } = jobs[i];
-      setBulkProgress({ current: i + 1, total: jobs.length, label: `${product.name} — ${region}` });
-
+    const runJob = async (job: { product: LetsKeysProduct; region: string }) => {
+      if (cancelRef.current) return;
       try {
-        const result = await fetchLetsKeysVariations(product.id, region);
+        const result = await fetchLetsKeysVariations(job.product.id, job.region);
         if (result.success && result.variations && result.variations.length > 0) {
-          const importRes = onImport(supplierId, product.id, result.variations);
-          addedCount += importRes.addedCount;
-          updatedCount += importRes.updatedCount;
-          priceChangedCount += importRes.priceChangedCount;
+          collected.push({ productId: job.product.id, variations: result.variations });
         } else if (!result.success) {
           failedCount++;
         }
       } catch {
         failedCount++;
       }
-      // A small pause between requests so we don't hammer LetsKeys' API.
-      await new Promise(r => setTimeout(r, 150));
-    }
+      completedCount++;
+      setBulkProgress({ current: completedCount, total: jobs.length, label: `${job.product.name} — ${job.region}` });
+    };
 
-    setBulkResult({ addedCount, updatedCount, priceChangedCount, failedCount });
+    // Simple concurrency pool: CONCURRENCY workers each pull the next job
+    // off the shared queue until it's empty or the user cancels.
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < jobs.length && !cancelRef.current) {
+        const job = jobs[nextIndex++];
+        await runJob(job);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, () => worker()));
+
+    const summary = collected.length > 0
+      ? onImport(supplierId, collected)
+      : { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
+
+    setBulkResult({ ...summary, failedCount });
     setBulkProgress(null);
     setIsBulkSyncing(false);
   };
@@ -150,7 +167,7 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
   const handleImport = () => {
     if (!selectedProduct || variations.length === 0) return;
     setIsImporting(true);
-    const result = onImport(supplierId, selectedProduct.id, variations);
+    const result = onImport(supplierId, [{ productId: selectedProduct.id, variations }]);
     setImportResult(result);
     setIsImporting(false);
   };

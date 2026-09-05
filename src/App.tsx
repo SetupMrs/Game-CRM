@@ -1023,10 +1023,16 @@ export default function App() {
   // Imports/updates products from a LetsKeys "variations" response into a
   // supplier's product list, matching by externalVariationId so re-running
   // this later updates prices (recording history) instead of duplicating.
+  // Merges a batch of LetsKeys product+variations results into a supplier's
+  // product list and persists it as a SINGLE save at the end. Crucially,
+  // this must NOT be called once per (product, region) job during a bulk
+  // sync — doing that previously fired one full-database save per job
+  // (hundreds of network round-trips to our own server, and a real risk of
+  // lost updates if several jobs' results arrived close together, since
+  // each one read `db` from a potentially stale render).
   const handleImportLetsKeysVariations = (
     supplierId: string,
-    productId: number,
-    variations: LetsKeysVariation[]
+    jobs: { productId: number; variations: LetsKeysVariation[] }[]
   ): { addedCount: number; updatedCount: number; priceChangedCount: number } => {
     const supplier = db.suppliers.find(s => s.id === supplierId);
     if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
@@ -1041,43 +1047,47 @@ export default function App() {
       if (p.externalVariationId) existingByExternalId[p.externalVariationId] = p;
     });
 
-    const updatedProducts = [...supplier.products];
+    let updatedProducts = [...supplier.products];
 
-    variations.forEach(v => {
-      const extId = String(v.id);
-      const existing = existingByExternalId[extId];
+    jobs.forEach(({ productId, variations }) => {
+      variations.forEach(v => {
+        const extId = String(v.id);
+        const existing = existingByExternalId[extId];
 
-      if (existing) {
-        let finalProd: ProductCard = { ...existing, externalInStock: v.in_stock, lastSyncedAt: now };
-        if (typeof existing.price === "number" && existing.price !== v.price) {
-          const historyEntry: PriceHistoryEntry = {
-            id: generateId("price"),
-            price: existing.price,
-            currency: existing.currency,
-            changedAt: now
+        if (existing) {
+          let finalProd: ProductCard = { ...existing, externalInStock: v.in_stock, lastSyncedAt: now };
+          if (typeof existing.price === "number" && existing.price !== v.price) {
+            const historyEntry: PriceHistoryEntry = {
+              id: generateId("price"),
+              price: existing.price,
+              currency: existing.currency,
+              changedAt: now
+            };
+            finalProd.priceHistory = [historyEntry, ...(existing.priceHistory || [])].slice(0, 50);
+            priceChangedCount++;
+          }
+          finalProd.price = v.price;
+          const idx = updatedProducts.findIndex(p => p.id === existing.id);
+          updatedProducts[idx] = finalProd;
+          existingByExternalId[extId] = finalProd;
+          updatedCount++;
+        } else {
+          const newProd: ProductCard = {
+            id: generateId("prod"),
+            title: v.name,
+            price: v.price,
+            currency: v.region, // "currency" field doubles as region tag app-wide
+            externalSource: "letskeys",
+            externalProductId: String(productId),
+            externalVariationId: extId,
+            externalInStock: v.in_stock,
+            lastSyncedAt: now
           };
-          finalProd.priceHistory = [historyEntry, ...(existing.priceHistory || [])].slice(0, 50);
-          priceChangedCount++;
+          updatedProducts.push(newProd);
+          existingByExternalId[extId] = newProd;
+          addedCount++;
         }
-        finalProd.price = v.price;
-        const idx = updatedProducts.findIndex(p => p.id === existing.id);
-        updatedProducts[idx] = finalProd;
-        updatedCount++;
-      } else {
-        const newProd: ProductCard = {
-          id: generateId("prod"),
-          title: v.name,
-          price: v.price,
-          currency: v.region, // "currency" field doubles as region tag app-wide
-          externalSource: "letskeys",
-          externalProductId: String(productId),
-          externalVariationId: extId,
-          externalInStock: v.in_stock,
-          lastSyncedAt: now
-        };
-        updatedProducts.push(newProd);
-        addedCount++;
-      }
+      });
     });
 
     const updatedSuppliers = db.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
