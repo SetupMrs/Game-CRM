@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Search, X, RefreshCw, Check, AlertCircle, Package } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Search, X, RefreshCw, Check, AlertCircle, Package, Zap, StopCircle } from "lucide-react";
 import { fetchLetsKeysProducts, fetchLetsKeysVariations, LetsKeysProduct, LetsKeysVariation } from "../apiClient";
 
 interface LetsKeysSyncModalProps {
@@ -8,19 +8,32 @@ interface LetsKeysSyncModalProps {
   onImport: (supplierId: string, productId: number, variations: LetsKeysVariation[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
 }
 
+interface BulkSummary {
+  addedCount: number;
+  updatedCount: number;
+  priceChangedCount: number;
+  failedCount: number;
+}
+
 export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: LetsKeysSyncModalProps) {
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [allProducts, setAllProducts] = useState<LetsKeysProduct[]>([]);
-  const [query, setQuery] = useState("");
 
+  // --- Bulk "sync everything" flow (the default, primary action) ---
+  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; label: string } | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkSummary | null>(null);
+  const cancelRef = useRef(false);
+
+  // --- Manual "one specific product" flow (secondary, for a targeted update) ---
+  const [showManualPicker, setShowManualPicker] = useState(false);
+  const [query, setQuery] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<LetsKeysProduct | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
-
   const [isLoadingVariations, setIsLoadingVariations] = useState(false);
   const [variationsError, setVariationsError] = useState<string | null>(null);
   const [variations, setVariations] = useState<LetsKeysVariation[]>([]);
-
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ addedCount: number; updatedCount: number; priceChangedCount: number } | null>(null);
 
@@ -29,12 +42,23 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
       setIsLoadingProducts(true);
       const result = await fetchLetsKeysProducts();
       if (result.success && result.products) {
-        setAllProducts(result.products);
+        // Defensive: guard against any product missing expected fields, so
+        // one malformed entry from the supplier's API can't crash the app.
+        const cleaned = result.products
+          .filter(p => p && typeof p.id !== "undefined")
+          .map(p => ({
+            ...p,
+            name: p.name || `Товар #${p.id}`,
+            regions: Array.isArray(p.regions) ? p.regions : [],
+            category_type: p.category_type || ""
+          }));
+        setAllProducts(cleaned);
       } else {
         setProductsError(result.message || "Не вдалося завантажити каталог LetsKeys.");
       }
       setIsLoadingProducts(false);
     })();
+    return () => { cancelRef.current = true; };
   }, []);
 
   const filteredProducts = useMemo(() => {
@@ -42,6 +66,61 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
     if (!q) return [];
     return allProducts.filter(p => p.name.toLowerCase().includes(q)).slice(0, 15);
   }, [allProducts, query]);
+
+  const totalJobsCount = useMemo(
+    () => allProducts.reduce((sum, p) => sum + (p.regions?.length || 0), 0),
+    [allProducts]
+  );
+
+  const handleBulkSyncAll = async () => {
+    if (allProducts.length === 0 || isBulkSyncing) return;
+    if (!window.confirm(
+      `Синхронізувати весь каталог LetsKeys (${allProducts.length} товарів, ${totalJobsCount} запитів по регіонах)? Це може зайняти кілька хвилин.`
+    )) {
+      return;
+    }
+
+    cancelRef.current = false;
+    setIsBulkSyncing(true);
+    setBulkResult(null);
+
+    const jobs: { product: LetsKeysProduct; region: string }[] = [];
+    allProducts.forEach(p => {
+      (p.regions || []).forEach(region => jobs.push({ product: p, region }));
+    });
+
+    let addedCount = 0, updatedCount = 0, priceChangedCount = 0, failedCount = 0;
+
+    for (let i = 0; i < jobs.length; i++) {
+      if (cancelRef.current) break;
+      const { product, region } = jobs[i];
+      setBulkProgress({ current: i + 1, total: jobs.length, label: `${product.name} — ${region}` });
+
+      try {
+        const result = await fetchLetsKeysVariations(product.id, region);
+        if (result.success && result.variations && result.variations.length > 0) {
+          const importRes = onImport(supplierId, product.id, result.variations);
+          addedCount += importRes.addedCount;
+          updatedCount += importRes.updatedCount;
+          priceChangedCount += importRes.priceChangedCount;
+        } else if (!result.success) {
+          failedCount++;
+        }
+      } catch {
+        failedCount++;
+      }
+      // A small pause between requests so we don't hammer LetsKeys' API.
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    setBulkResult({ addedCount, updatedCount, priceChangedCount, failedCount });
+    setBulkProgress(null);
+    setIsBulkSyncing(false);
+  };
+
+  const handleCancelBulkSync = () => {
+    cancelRef.current = true;
+  };
 
   const handleSelectProduct = (product: LetsKeysProduct) => {
     setSelectedProduct(product);
@@ -97,131 +176,206 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
             </div>
           )}
 
-          {/* Step 1: search + pick a product */}
-          {!selectedProduct && (
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                1. Знайдіть товар (гру/сервіс)
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-500" />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={isLoadingProducts ? "Завантаження каталогу..." : "напр. Xbox Game Pass"}
-                  disabled={isLoadingProducts}
-                  className="w-full pl-9 pr-3 py-2 text-sm border border-white/10 rounded-lg bg-white/[0.02] text-white focus:outline-hidden focus:border-emerald-500 disabled:opacity-50"
-                />
+          {/* Primary action: sync the entire catalog automatically */}
+          <div className="bg-[#161618] border border-white/5 rounded-xl p-4 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <Zap className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-white">Синхронізувати весь каталог</p>
+                <p className="text-[11px] text-gray-500">
+                  Автоматично завантажить усі {allProducts.length || "…"} товарів з усіма регіонами і цінами — без ручного вибору.
+                </p>
               </div>
-              {query.trim() && (
-                <div className="border border-white/10 rounded-lg max-h-64 overflow-y-auto divide-y divide-white/5">
-                  {filteredProducts.length > 0 ? (
-                    filteredProducts.map(p => (
-                      <button
-                        key={p.id}
-                        onClick={() => handleSelectProduct(p)}
-                        className="w-full text-left px-3 py-2 hover:bg-white/5 cursor-pointer"
-                      >
-                        <p className="text-xs text-white font-semibold">{p.name}</p>
-                        <p className="text-[10px] text-gray-500">{p.category_type} · {p.regions.length} регіонів</p>
-                      </button>
-                    ))
-                  ) : (
-                    <p className="text-xs text-gray-500 text-center py-4">Нічого не знайдено.</p>
+            </div>
+
+            {isBulkSyncing && bulkProgress ? (
+              <div className="space-y-2">
+                <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 rounded-full transition-all"
+                    style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 truncate">
+                  {bulkProgress.current}/{bulkProgress.total} · {bulkProgress.label}
+                </p>
+                <button
+                  onClick={handleCancelBulkSync}
+                  className="w-full flex items-center justify-center gap-1.5 bg-red-600/15 border border-red-500/20 hover:bg-red-600/25 text-red-400 text-xs font-bold py-2 rounded-lg cursor-pointer"
+                >
+                  <StopCircle className="w-3.5 h-3.5" />
+                  Зупинити
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleBulkSyncAll}
+                disabled={isLoadingProducts || allProducts.length === 0}
+                className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold py-2.5 rounded-lg cursor-pointer"
+              >
+                {isLoadingProducts ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Завантаження каталогу...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    Синхронізувати все ({allProducts.length} товарів)
+                  </>
+                )}
+              </button>
+            )}
+
+            {bulkResult && (
+              <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
+                <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  Готово! Додано: {bulkResult.addedCount}, оновлено: {bulkResult.updatedCount}
+                  {bulkResult.priceChangedCount > 0 && `, зміна ціни: ${bulkResult.priceChangedCount}`}
+                  {bulkResult.failedCount > 0 && `. Не вдалось обробити: ${bulkResult.failedCount}`}.
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Secondary: manual search for a single product, e.g. for a quick one-off update */}
+          <div className="pt-1">
+            <button
+              onClick={() => setShowManualPicker(!showManualPicker)}
+              className="text-[11px] text-gray-500 hover:text-white underline cursor-pointer"
+              disabled={isBulkSyncing}
+            >
+              {showManualPicker ? "Сховати ручний вибір" : "Або оновити лише один конкретний товар"}
+            </button>
+          </div>
+
+          {showManualPicker && (
+            <div className="space-y-3 border-t border-white/5 pt-3">
+              {!selectedProduct && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Знайдіть товар (гру/сервіс)
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-500" />
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder={isLoadingProducts ? "Завантаження каталогу..." : "напр. Xbox Game Pass"}
+                      disabled={isLoadingProducts}
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-white/10 rounded-lg bg-white/[0.02] text-white focus:outline-hidden focus:border-emerald-500 disabled:opacity-50"
+                    />
+                  </div>
+                  {query.trim() && (
+                    <div className="border border-white/10 rounded-lg max-h-64 overflow-y-auto divide-y divide-white/5">
+                      {filteredProducts.length > 0 ? (
+                        filteredProducts.map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => handleSelectProduct(p)}
+                            className="w-full text-left px-3 py-2 hover:bg-white/5 cursor-pointer"
+                          >
+                            <p className="text-xs text-white font-semibold">{p.name}</p>
+                            <p className="text-[10px] text-gray-500">{p.category_type} · {p.regions?.length || 0} регіонів</p>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-500 text-center py-4">Нічого не знайдено.</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
 
-          {/* Step 2: pick a region */}
-          {selectedProduct && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between bg-[#161618] border border-white/5 rounded-lg px-3 py-2">
-                <div>
-                  <p className="text-xs font-bold text-white">{selectedProduct.name}</p>
-                  <p className="text-[10px] text-gray-500">{selectedProduct.category_type}</p>
-                </div>
-                <button
-                  onClick={() => { setSelectedProduct(null); setSelectedRegion(null); setVariations([]); setImportResult(null); }}
-                  className="text-[10px] text-gray-500 hover:text-white underline cursor-pointer shrink-0"
-                >
-                  Обрати інший товар
-                </button>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-                  2. Оберіть регіон
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedProduct.regions.map(region => (
-                    <button
-                      key={region}
-                      onClick={() => handleSelectRegion(region)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold border cursor-pointer transition-all ${
-                        selectedRegion === region
-                          ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
-                          : "bg-white/[0.01] border-white/10 text-gray-300 hover:bg-white/5"
-                      }`}
-                    >
-                      {region}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Step 3: variations preview + import */}
-              {selectedRegion && (
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                    3. Варіації для імпорту
-                  </label>
-
-                  {isLoadingVariations ? (
-                    <p className="text-xs text-gray-500 text-center py-4">Завантаження...</p>
-                  ) : variationsError ? (
-                    <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-2.5">
-                      {variationsError}
+              {selectedProduct && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between bg-[#161618] border border-white/5 rounded-lg px-3 py-2">
+                    <div>
+                      <p className="text-xs font-bold text-white">{selectedProduct.name}</p>
+                      <p className="text-[10px] text-gray-500">{selectedProduct.category_type}</p>
                     </div>
-                  ) : variations.length > 0 ? (
-                    <>
-                      <div className="border border-white/10 rounded-lg max-h-56 overflow-y-auto divide-y divide-white/5">
-                        {variations.map(v => (
-                          <div key={v.id} className="flex items-center justify-between px-3 py-2 text-xs">
-                            <div className="min-w-0">
-                              <p className="text-white truncate">{v.name}</p>
-                              <p className={`text-[10px] ${v.in_stock ? "text-emerald-400" : "text-red-400"}`}>
-                                {v.in_stock ? "в наявності" : "немає в наявності"}
-                              </p>
-                            </div>
-                            <span className="font-mono font-bold text-gray-300 shrink-0">{v.price}</span>
-                          </div>
-                        ))}
-                      </div>
+                    <button
+                      onClick={() => { setSelectedProduct(null); setSelectedRegion(null); setVariations([]); setImportResult(null); }}
+                      className="text-[10px] text-gray-500 hover:text-white underline cursor-pointer shrink-0"
+                    >
+                      Обрати інший товар
+                    </button>
+                  </div>
 
-                      {importResult ? (
-                        <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
-                          <Check className="w-4 h-4 shrink-0 mt-0.5" />
-                          <span>
-                            Готово! Додано: {importResult.addedCount}, оновлено: {importResult.updatedCount}
-                            {importResult.priceChangedCount > 0 && `, зміна ціни: ${importResult.priceChangedCount}`}.
-                          </span>
-                        </div>
-                      ) : (
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+                      Оберіть регіон
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(selectedProduct.regions || []).map(region => (
                         <button
-                          onClick={handleImport}
-                          disabled={isImporting}
-                          className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-lg cursor-pointer"
+                          key={region}
+                          onClick={() => handleSelectRegion(region)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold border cursor-pointer transition-all ${
+                            selectedRegion === region
+                              ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
+                              : "bg-white/[0.01] border-white/10 text-gray-300 hover:bg-white/5"
+                          }`}
                         >
-                          {isImporting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                          Імпортувати {variations.length} варіацій
+                          {region}
                         </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedRegion && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                        Варіації для імпорту
+                      </label>
+
+                      {isLoadingVariations ? (
+                        <p className="text-xs text-gray-500 text-center py-4">Завантаження...</p>
+                      ) : variationsError ? (
+                        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-2.5">
+                          {variationsError}
+                        </div>
+                      ) : variations.length > 0 ? (
+                        <>
+                          <div className="border border-white/10 rounded-lg max-h-56 overflow-y-auto divide-y divide-white/5">
+                            {variations.map(v => (
+                              <div key={v.id} className="flex items-center justify-between px-3 py-2 text-xs">
+                                <div className="min-w-0">
+                                  <p className="text-white truncate">{v.name}</p>
+                                  <p className={`text-[10px] ${v.in_stock ? "text-emerald-400" : "text-red-400"}`}>
+                                    {v.in_stock ? "в наявності" : "немає в наявності"}
+                                  </p>
+                                </div>
+                                <span className="font-mono font-bold text-gray-300 shrink-0">{v.price}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          {importResult ? (
+                            <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
+                              <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                              <span>
+                                Готово! Додано: {importResult.addedCount}, оновлено: {importResult.updatedCount}
+                                {importResult.priceChangedCount > 0 && `, зміна ціни: ${importResult.priceChangedCount}`}.
+                              </span>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={handleImport}
+                              disabled={isImporting}
+                              className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-lg cursor-pointer"
+                            >
+                              {isImporting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                              Імпортувати {variations.length} варіацій
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs text-gray-500 text-center py-4">Для цього регіону немає варіацій.</p>
                       )}
-                    </>
-                  ) : (
-                    <p className="text-xs text-gray-500 text-center py-4">Для цього регіону немає варіацій.</p>
+                    </div>
                   )}
                 </div>
               )}
