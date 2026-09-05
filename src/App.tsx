@@ -15,10 +15,11 @@ import {
   Trash2,
   ShieldCheck,
   Bell,
+  TrendingUp,
   Search
 } from "lucide-react";
 import { Task, Transaction, DatabaseState, Supplier, ProductCard, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
-import { generateId } from "./utils";
+import { generateId, formatDate } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
 import UsersManager from "./components/UsersManager";
@@ -35,6 +36,8 @@ const SupplierManager = lazy(() => import("./components/SupplierManager"));
 const LOCAL_CACHE_KEY = "game_crm_srm_db_cache";
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
 const LAST_NOTIFIED_DATE_KEY = "game_crm_last_notified_date";
+const SEEN_PRICE_ALERTS_KEY = "game_crm_seen_price_alerts";
+const LAST_PRICE_NOTIFIED_DATE_KEY = "game_crm_last_price_notified_date";
 const MAX_ACTIVITY_LOG_ENTRIES = 300;
 const TRASH_RETENTION_DAYS = 30;
 
@@ -185,6 +188,80 @@ export default function App() {
     return db.tasks.filter(t => !t.deletedAt && t.status !== "Completed" && t.status !== "Cancelled" && t.dueDate <= todayStr);
   }, [db.tasks]);
 
+  // --- Price increase alerts ---------------------------------------------
+  // priceHistory[0] is the most recent *previous* price (see handleUpdateProduct
+  // below) — if the current price is higher than that, the supplier raised
+  // the price. We track which specific price-change events the user has
+  // already seen (by the history entry's id) in localStorage, so an alert
+  // only shows once until the price changes again.
+  interface PriceIncreaseAlert {
+    id: string; // priceHistory entry id — unique per price-change event
+    supplierName: string;
+    productTitle: string;
+    oldPrice: number;
+    newPrice: number;
+    currency: string;
+    changedAt: string;
+  }
+
+  const [seenPriceAlertIds, setSeenPriceAlertIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(SEEN_PRICE_ALERTS_KEY);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const [isPriceAlertsOpen, setIsPriceAlertsOpen] = useState(false);
+
+  const priceIncreaseAlerts = useMemo((): PriceIncreaseAlert[] => {
+    const alerts: PriceIncreaseAlert[] = [];
+    (db.suppliers || []).forEach(s => {
+      if (s.deletedAt) return;
+      (s.products || []).forEach(p => {
+        if (p.deletedAt) return;
+        const lastChange = p.priceHistory?.[0];
+        if (!lastChange || typeof p.price !== "number") return;
+        const sameCurrency = (lastChange.currency || "UAH") === (p.currency || "UAH");
+        if (sameCurrency && p.price > lastChange.price) {
+          alerts.push({
+            id: lastChange.id,
+            supplierName: s.name,
+            productTitle: p.title,
+            oldPrice: lastChange.price,
+            newPrice: p.price,
+            currency: p.currency || "UAH",
+            changedAt: lastChange.changedAt
+          });
+        }
+      });
+    });
+    return alerts.sort((a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime());
+  }, [db.suppliers]);
+
+  const unseenPriceAlerts = useMemo(
+    () => priceIncreaseAlerts.filter(a => !seenPriceAlertIds.has(a.id)),
+    [priceIncreaseAlerts, seenPriceAlertIds]
+  );
+
+  const markPriceAlertSeen = (id: string) => {
+    setSeenPriceAlertIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      try { localStorage.setItem(SEEN_PRICE_ALERTS_KEY, JSON.stringify(Array.from(next))); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const markAllPriceAlertsSeen = () => {
+    setSeenPriceAlertIds(prev => {
+      const next = new Set(prev);
+      priceIncreaseAlerts.forEach(a => next.add(a.id));
+      try { localStorage.setItem(SEEN_PRICE_ALERTS_KEY, JSON.stringify(Array.from(next))); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   const handleEnableNotifications = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
       setBackupFeedback({ type: "error", message: "Цей браузер не підтримує сповіщення." });
@@ -225,6 +302,28 @@ export default function App() {
       console.warn("Failed to show notification:", e);
     }
   }, [notificationsEnabled, isLoading, urgentTasks.length]);
+
+  // Fire a single browser notification per day summarizing new price
+  // increases, same pattern as the deadline notification above.
+  useEffect(() => {
+    if (!notificationsEnabled || isLoading) return;
+    if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+    if (unseenPriceAlerts.length === 0) return;
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    let lastNotified = "";
+    try { lastNotified = localStorage.getItem(LAST_PRICE_NOTIFIED_DATE_KEY) || ""; } catch { /* ignore */ }
+    if (lastNotified === todayStr) return;
+
+    try {
+      new Notification("Game CRM: постачальник підвищив ціну", {
+        body: `${unseenPriceAlerts.length} ${unseenPriceAlerts.length === 1 ? "товар подорожчав" : "товарів подорожчали"} — перевірте розділ «Постачальники».`
+      });
+      localStorage.setItem(LAST_PRICE_NOTIFIED_DATE_KEY, todayStr);
+    } catch (e) {
+      console.warn("Failed to show notification:", e);
+    }
+  }, [notificationsEnabled, isLoading, unseenPriceAlerts.length]);
 
   // Global search across tasks, suppliers and finance
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
@@ -1110,6 +1209,77 @@ export default function App() {
                 </span>
               )}
             </button>
+
+            {/* Price increase alerts */}
+            <div className="relative">
+              <button
+                onClick={() => setIsPriceAlertsOpen(!isPriceAlertsOpen)}
+                className="relative flex items-center gap-1.5 bg-[#1A1A1C] hover:bg-white/5 border border-white/5 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                title={unseenPriceAlerts.length > 0 ? `Подорожчали товари: ${unseenPriceAlerts.length}` : "Підвищень ціни немає"}
+              >
+                <TrendingUp className={`w-3.5 h-3.5 ${unseenPriceAlerts.length > 0 ? "text-amber-400" : "text-gray-400"}`} />
+                {unseenPriceAlerts.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-black text-[9px] font-bold rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center">
+                    {unseenPriceAlerts.length > 9 ? "9+" : unseenPriceAlerts.length}
+                  </span>
+                )}
+              </button>
+
+              {isPriceAlertsOpen && (
+                <div className="absolute right-0 mt-1.5 w-80 bg-[#161618] border border-white/10 rounded-xl shadow-2xl z-30 max-h-96 overflow-hidden flex flex-col">
+                  <div className="px-3 py-2.5 border-b border-white/5 flex items-center justify-between shrink-0">
+                    <span className="text-xs font-bold text-white">Підвищення цін постачальників</span>
+                    {unseenPriceAlerts.length > 0 && (
+                      <button
+                        onClick={markAllPriceAlertsSeen}
+                        className="text-[10px] text-gray-500 hover:text-white underline cursor-pointer"
+                      >
+                        Позначити всі переглянутими
+                      </button>
+                    )}
+                  </div>
+                  <div className="overflow-y-auto flex-1">
+                    {priceIncreaseAlerts.length === 0 ? (
+                      <p className="text-xs text-gray-500 text-center py-6">Підвищень цін ще не зафіксовано.</p>
+                    ) : (
+                      priceIncreaseAlerts.map(alert => {
+                        const isUnseen = !seenPriceAlertIds.has(alert.id);
+                        const diff = alert.newPrice - alert.oldPrice;
+                        const pct = alert.oldPrice > 0 ? Math.round((diff / alert.oldPrice) * 100) : 0;
+                        return (
+                          <div
+                            key={alert.id}
+                            className={`px-3 py-2.5 border-b border-white/5 last:border-0 ${isUnseen ? "bg-amber-500/5" : ""}`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-white truncate">{alert.productTitle}</p>
+                                <p className="text-[10px] text-gray-500 truncate">{alert.supplierName} · {formatDate(alert.changedAt)}</p>
+                              </div>
+                              {isUnseen && (
+                                <button
+                                  onClick={() => markPriceAlertSeen(alert.id)}
+                                  className="text-[10px] text-gray-500 hover:text-white shrink-0 cursor-pointer"
+                                  title="Позначити переглянутим"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-xs font-mono mt-1">
+                              <span className="text-gray-500">{alert.oldPrice}</span>
+                              <span className="text-gray-600 mx-1">→</span>
+                              <span className="text-amber-400 font-bold">{alert.newPrice} {alert.currency}</span>
+                              <span className="text-amber-500/70 ml-1.5">(+{pct}%)</span>
+                            </p>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Trash bin */}
             <button
