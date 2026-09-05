@@ -43,7 +43,7 @@ interface SupplierManagerProps {
   onUpdateProduct?: (supplierId: string, productId: string, product: ProductCard) => void;
   onDeleteProduct: (supplierId: string, productId: string) => void;
   onToggleProductAdded?: (supplierId: string, productId: string) => void;
-  onImportLetsKeysVariations?: (supplierId: string, jobs: { productId: number; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
+  onImportLetsKeysVariations?: (supplierId: string, jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
   onAddTask?: (task: Omit<Task, "id">) => void;
   onUpdateTask?: (task: Task) => void;
 }

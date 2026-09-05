@@ -5,7 +5,7 @@ import { fetchLetsKeysProducts, fetchLetsKeysVariations, LetsKeysProduct, LetsKe
 interface LetsKeysSyncModalProps {
   supplierId: string;
   onClose: () => void;
-  onImport: (supplierId: string, jobs: { productId: number; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
+  onImport: (supplierId: string, jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
 }
 
 interface BulkSummary {
@@ -94,7 +94,7 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
     // Calling onImport per job would mean hundreds of full-database saves
     // (extremely slow) and a real risk of lost updates if two jobs' saves
     // raced against each other.
-    const collected: { productId: number; variations: LetsKeysVariation[] }[] = [];
+    const collected: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[] = [];
     let failedCount = 0;
     let completedCount = 0;
     const CONCURRENCY = 5; // a handful of requests in flight at once, not one-by-one
@@ -104,7 +104,7 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
       try {
         const result = await fetchLetsKeysVariations(job.product.id, job.region);
         if (result.success && result.variations && result.variations.length > 0) {
-          collected.push({ productId: job.product.id, variations: result.variations });
+          collected.push({ productId: job.product.id, productName: job.product.name, region: job.region, variations: result.variations });
         } else if (!result.success) {
           failedCount++;
         }
@@ -167,7 +167,7 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
   const handleImport = () => {
     if (!selectedProduct || variations.length === 0) return;
     setIsImporting(true);
-    const result = onImport(supplierId, [{ productId: selectedProduct.id, variations }]);
+    const result = onImport(supplierId, [{ productId: selectedProduct.id, productName: selectedProduct.name, region: selectedRegion || "", variations }]);
     setImportResult(result);
     setIsImporting(false);
   };

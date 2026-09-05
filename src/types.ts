@@ -177,6 +177,11 @@ export interface CategoryItem {
   isAdded?: boolean;
   createdAt?: string;
   platform?: string;
+  priceHistory?: PriceHistoryEntry[]; // попередні ціни цього конкретного номіналу, найновіша перша
+  // --- Синхронізація із зовнішнім API постачальника (напр. LetsKeys) ---
+  externalVariationId?: string; // id конкретного номіналу/варіації у постачальника
+  externalInStock?: boolean; // наявність за даними постачальника (не плутати з status)
+  lastSyncedAt?: string; // ISO — коли востаннє підтягнуто цей номінал з API
 }
 
 export interface PriceHistoryEntry {
@@ -200,10 +205,12 @@ export interface ProductCard {
   priceHistory?: PriceHistoryEntry[]; // попередні ціни, найновіша перша
   deletedAt?: string; // якщо задано — товар у кошику, не показується в основних списках
   // --- Синхронізація із зовнішнім API постачальника (напр. LetsKeys) ---
+  // Номінали/варіації товару зберігаються як items[] (кожен зі своїм
+  // externalVariationId) — ця картка представляє один товар в одному
+  // регіоні, а не окремий номінал.
   externalSource?: string; // напр. "letskeys"
-  externalProductId?: string; // id "гри/сервісу" у постачальника
-  externalVariationId?: string; // id конкретної варіації (те, що реально продається)
-  externalInStock?: boolean; // наявність за даними постачальника (не плутати з items[].status)
+  externalProductId?: string; // id товару (гри/сервісу) у постачальника
+  externalRegion?: string; // регіон, для якого підтягнуто цю картку
   lastSyncedAt?: string; // ISO — коли востаннє підтягнуто дані з API
 }
 

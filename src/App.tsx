@@ -18,7 +18,7 @@ import {
   TrendingUp,
   Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
@@ -220,20 +220,41 @@ export default function App() {
       if (s.deletedAt) return;
       (s.products || []).forEach(p => {
         if (p.deletedAt) return;
+
+        // Price set directly on the product card (manual entry, no items[])
         const lastChange = p.priceHistory?.[0];
-        if (!lastChange || typeof p.price !== "number") return;
-        const sameCurrency = (lastChange.currency || "UAH") === (p.currency || "UAH");
-        if (sameCurrency && p.price > lastChange.price) {
-          alerts.push({
-            id: lastChange.id,
-            supplierName: s.name,
-            productTitle: p.title,
-            oldPrice: lastChange.price,
-            newPrice: p.price,
-            currency: p.currency || "UAH",
-            changedAt: lastChange.changedAt
-          });
+        if (lastChange && typeof p.price === "number") {
+          const sameCurrency = (lastChange.currency || "UAH") === (p.currency || "UAH");
+          if (sameCurrency && p.price > lastChange.price) {
+            alerts.push({
+              id: lastChange.id,
+              supplierName: s.name,
+              productTitle: p.title,
+              oldPrice: lastChange.price,
+              newPrice: p.price,
+              currency: p.currency || "UAH",
+              changedAt: lastChange.changedAt
+            });
+          }
         }
+
+        // Price set on individual denominations/codes (e.g. synced from LetsKeys)
+        (p.items || []).forEach(item => {
+          const itemLastChange = item.priceHistory?.[0];
+          if (!itemLastChange || typeof item.price !== "number") return;
+          const sameCurrency = (itemLastChange.currency || p.currency || "UAH") === (item.currency || p.currency || "UAH");
+          if (sameCurrency && item.price > itemLastChange.price) {
+            alerts.push({
+              id: itemLastChange.id,
+              supplierName: s.name,
+              productTitle: item.title ? `${p.title} — ${item.title}` : p.title,
+              oldPrice: itemLastChange.price,
+              newPrice: item.price,
+              currency: item.currency || p.currency || "UAH",
+              changedAt: itemLastChange.changedAt
+            });
+          }
+        });
       });
     });
     return alerts.sort((a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime());
@@ -1024,15 +1045,16 @@ export default function App() {
   // supplier's product list, matching by externalVariationId so re-running
   // this later updates prices (recording history) instead of duplicating.
   // Merges a batch of LetsKeys product+variations results into a supplier's
-  // product list and persists it as a SINGLE save at the end. Crucially,
-  // this must NOT be called once per (product, region) job during a bulk
-  // sync — doing that previously fired one full-database save per job
-  // (hundreds of network round-trips to our own server, and a real risk of
-  // lost updates if several jobs' results arrived close together, since
-  // each one read `db` from a potentially stale render).
+  // product list and persists it as a SINGLE save at the end. Each LetsKeys
+  // "product" (in one region) becomes ONE ProductCard — its variations
+  // (denominations/durations) become items[] inside that card, matching how
+  // suppliers already model "one product, many codes/denominations". This
+  // must NOT be called once per (product, region) job during a bulk sync —
+  // doing that previously fired one full-database save per job (hundreds of
+  // network round-trips, and a real risk of lost updates from stale reads).
   const handleImportLetsKeysVariations = (
     supplierId: string,
-    jobs: { productId: number; variations: LetsKeysVariation[] }[]
+    jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]
   ): { addedCount: number; updatedCount: number; priceChangedCount: number } => {
     const supplier = db.suppliers.find(s => s.id === supplierId);
     if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
@@ -1042,52 +1064,90 @@ export default function App() {
     let priceChangedCount = 0;
     const now = new Date().toISOString();
 
-    const existingByExternalId: Record<string, ProductCard> = {};
+    // Match existing ProductCards by (externalProductId, region) so re-syncing
+    // updates the same card's denominations instead of duplicating it.
+    const cardByProductRegion: Record<string, ProductCard> = {};
     supplier.products.forEach(p => {
-      if (p.externalVariationId) existingByExternalId[p.externalVariationId] = p;
+      if (p.externalProductId && p.externalRegion) {
+        cardByProductRegion[`${p.externalProductId}::${p.externalRegion}`] = p;
+      }
     });
 
     let updatedProducts = [...supplier.products];
 
-    jobs.forEach(({ productId, variations }) => {
+    jobs.forEach(({ productId, productName, region, variations }) => {
+      if (variations.length === 0) return;
+      const key = `${productId}::${region}`;
+      const existingCard = cardByProductRegion[key];
+
+      // Merge this job's variations into the card's items[], matching each
+      // by externalVariationId so prices update in place instead of piling up.
+      const baseItems = existingCard?.items || [];
+      const itemByExternalId: Record<string, CategoryItem> = {};
+      baseItems.forEach(item => {
+        if (item.externalVariationId) itemByExternalId[item.externalVariationId] = item;
+      });
+
+      const mergedItems = [...baseItems];
       variations.forEach(v => {
         const extId = String(v.id);
-        const existing = existingByExternalId[extId];
+        const existingItem = itemByExternalId[extId];
 
-        if (existing) {
-          let finalProd: ProductCard = { ...existing, externalInStock: v.in_stock, lastSyncedAt: now };
-          if (typeof existing.price === "number" && existing.price !== v.price) {
+        if (existingItem) {
+          let finalItem: CategoryItem = { ...existingItem, externalInStock: v.in_stock, lastSyncedAt: now };
+          if (typeof existingItem.price === "number" && existingItem.price !== v.price) {
             const historyEntry: PriceHistoryEntry = {
               id: generateId("price"),
-              price: existing.price,
-              currency: existing.currency,
+              price: existingItem.price,
+              currency: existingItem.currency,
               changedAt: now
             };
-            finalProd.priceHistory = [historyEntry, ...(existing.priceHistory || [])].slice(0, 50);
+            finalItem.priceHistory = [historyEntry, ...(existingItem.priceHistory || [])].slice(0, 50);
             priceChangedCount++;
           }
-          finalProd.price = v.price;
-          const idx = updatedProducts.findIndex(p => p.id === existing.id);
-          updatedProducts[idx] = finalProd;
-          existingByExternalId[extId] = finalProd;
+          finalItem.price = v.price;
+          finalItem.title = v.name;
+          const idx = mergedItems.findIndex(i => i.id === existingItem.id);
+          mergedItems[idx] = finalItem;
+          itemByExternalId[extId] = finalItem;
           updatedCount++;
         } else {
-          const newProd: ProductCard = {
-            id: generateId("prod"),
+          const newItem: CategoryItem = {
+            id: generateId("item"),
+            code: extId,
             title: v.name,
             price: v.price,
-            currency: v.region, // "currency" field doubles as region tag app-wide
-            externalSource: "letskeys",
-            externalProductId: String(productId),
+            status: "Available",
+            createdAt: now,
             externalVariationId: extId,
             externalInStock: v.in_stock,
             lastSyncedAt: now
           };
-          updatedProducts.push(newProd);
-          existingByExternalId[extId] = newProd;
+          mergedItems.push(newItem);
+          itemByExternalId[extId] = newItem;
           addedCount++;
         }
       });
+
+      if (existingCard) {
+        const finalCard: ProductCard = { ...existingCard, items: mergedItems, lastSyncedAt: now };
+        const idx = updatedProducts.findIndex(p => p.id === existingCard.id);
+        updatedProducts[idx] = finalCard;
+        cardByProductRegion[key] = finalCard;
+      } else {
+        const newCard: ProductCard = {
+          id: generateId("prod"),
+          title: productName,
+          currency: region, // "currency" field doubles as region tag app-wide
+          items: mergedItems,
+          externalSource: "letskeys",
+          externalProductId: String(productId),
+          externalRegion: region,
+          lastSyncedAt: now
+        };
+        updatedProducts.push(newCard);
+        cardByProductRegion[key] = newCard;
+      }
     });
 
     const updatedSuppliers = db.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
