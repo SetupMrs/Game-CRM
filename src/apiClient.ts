@@ -103,6 +103,24 @@ export async function logout(): Promise<void> {
 
 // --- User management (admin only) -----------------------------------------
 
+export interface BasicUser {
+  id: string;
+  username: string;
+}
+
+// Any authenticated user (not just admins) can fetch this lightweight list —
+// used to populate "assign to..." pickers across the app.
+export async function listBasicUsers(): Promise<BasicUser[]> {
+  try {
+    const res = await apiFetch("/api/users/basic");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.users || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function listUsers(): Promise<{ success: boolean; users?: AppUser[]; message?: string }> {
   try {
     const res = await apiFetch("/api/users");

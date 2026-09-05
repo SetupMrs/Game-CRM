@@ -1,3 +1,5 @@
+import { TEAM_MEMBER_COLORS } from "./types";
+
 /**
  * Generates a reasonably unique id. Uses crypto.randomUUID when available
  * (all modern browsers), falling back to timestamp + random suffix so two
@@ -58,4 +60,18 @@ export function formatRelativeTime(isoString: string): string {
   const diffDay = Math.round(diffHour / 24);
   if (diffDay < 7) return `${diffDay} ${diffDay === 1 ? "день" : "дні"} тому`;
   return formatDate(isoString);
+}
+
+/**
+ * Deterministically picks an avatar color for a user id/username from
+ * TEAM_MEMBER_COLORS — same input always maps to the same color, so a
+ * person's avatar color stays consistent across the app without needing to
+ * be stored anywhere.
+ */
+export function getAvatarColor(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return TEAM_MEMBER_COLORS[hash % TEAM_MEMBER_COLORS.length];
 }

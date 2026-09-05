@@ -42,7 +42,7 @@ import {
   TaskStatus, 
   TaskImage, 
   VoiceNote, 
-  TeamMember,
+  AssignableUser,
   TaskTemplate,
   TaskLinkedProduct,
   Supplier,
@@ -50,7 +50,7 @@ import {
   TASK_STATUS_CONFIGS, 
   TASK_STATUS_LIST 
 } from "../types";
-import { formatDate, generateId } from "../utils";
+import { formatDate, generateId, getAvatarColor } from "../utils";
 import VoiceRecorder from "./VoiceRecorder";
 import VoicePlayer from "./VoicePlayer";
 import ImageAttachmentUploader from "./ImageAttachmentUploader";
@@ -70,7 +70,7 @@ const RECURRENCE_LABELS: Record<RecurrenceFrequency, string> = {
 
 interface TaskManagerProps {
   tasks: Task[];
-  teamMembers: TeamMember[];
+  assignableUsers: AssignableUser[];
   currentUserId: string | null;
   taskTemplates: TaskTemplate[];
   suppliers: Supplier[];
@@ -156,7 +156,7 @@ function DatePickerInput({
 
 export default function TaskManager({
   tasks,
-  teamMembers,
+  assignableUsers,
   currentUserId,
   taskTemplates,
   suppliers,
@@ -203,10 +203,10 @@ export default function TaskManager({
   };
 
   const memberById = useMemo(() => {
-    const map: Record<string, TeamMember> = {};
-    teamMembers.forEach(m => { map[m.id] = m; });
+    const map: Record<string, AssignableUser> = {};
+    assignableUsers.forEach(m => { map[m.id] = m; });
     return map;
-  }, [teamMembers]);
+  }, [assignableUsers]);
 
   // Collect all unique tags currently existing in tasks for dynamic filtering
   const allAvailableTags = useMemo(() => {
@@ -534,13 +534,8 @@ export default function TaskManager({
       st.id === subId ? { ...st, completed: !st.completed } : st
     );
 
-    // If all subtasks completed, auto-update status to Completed
-    const allCompleted = updatedSubtasks.length > 0 && updatedSubtasks.every(st => st.completed);
-    const updatedStatus = allCompleted ? "Completed" as const : selectedTaskForEdit.status;
-
     setSelectedTaskForEdit({
       ...selectedTaskForEdit,
-      status: updatedStatus,
       subTasks: updatedSubtasks
     });
   };
@@ -581,13 +576,12 @@ export default function TaskManager({
       st.id === subId ? { ...st, completed: !st.completed } : st
     );
 
-    // Auto complete check
-    const allCompleted = updatedSubTasks.length > 0 && updatedSubTasks.every(st => st.completed);
-    const nextStatus = allCompleted ? "Completed" as const : task.status;
-
+    // Toggling a subtask only updates the checklist — it no longer changes
+    // the task's own status. The task's status is a separate, deliberate
+    // action (status badge / "В роботу" button), not an automatic side
+    // effect of finishing a checklist.
     onUpdateTask({
       ...task,
-      status: nextStatus,
       subTasks: updatedSubTasks
     });
   };
@@ -787,9 +781,9 @@ export default function TaskManager({
             >
               <option value="All">Всі відповідальні</option>
               <option value="Unassigned">Без відповідального</option>
-              {teamMembers.map((m) => (
+              {assignableUsers.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}
+                  {m.username}
                 </option>
               ))}
             </select>
@@ -866,7 +860,7 @@ export default function TaskManager({
       {viewMode === "calendar" && (
         <TaskCalendarView
           tasks={filteredTasks}
-          teamMembers={teamMembers}
+          assignableUsers={assignableUsers}
           onSelectTask={handleOpenEditModal}
         />
       )}
@@ -906,8 +900,8 @@ export default function TaskManager({
           >
             <option value="" disabled>Призначити відповідального...</option>
             <option value="">Не призначено</option>
-            {teamMembers.map(m => (
-              <option key={m.id} value={m.id}>{m.name}</option>
+            {assignableUsers.map(m => (
+              <option key={m.id} value={m.id}>{m.username}</option>
             ))}
           </select>
 
@@ -1200,8 +1194,8 @@ export default function TaskManager({
                   className="w-full px-3 py-2 text-xs border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white cursor-pointer"
                 >
                   <option value="">Не призначено</option>
-                  {teamMembers.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
+                  {assignableUsers.map((m) => (
+                    <option key={m.id} value={m.id}>{m.username}</option>
                   ))}
                 </select>
               </div>
@@ -1477,7 +1471,7 @@ export default function TaskManager({
                   onUpdateTask={handleUpdateTaskFromChat}
                   onOpenLightbox={handleOpenLightbox}
                   isModal={false}
-                  teamMembers={teamMembers}
+                  assignableUsers={assignableUsers}
                   currentUserId={currentUserId}
                 />
               </div>
@@ -1547,8 +1541,8 @@ export default function TaskManager({
                       className="w-full px-3 py-1.5 text-xs border border-white/10 rounded-lg bg-[#161618] text-white focus:outline-hidden cursor-pointer"
                     >
                       <option value="">Не призначено</option>
-                      {teamMembers.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
+                      {assignableUsers.map((m) => (
+                        <option key={m.id} value={m.id}>{m.username}</option>
                       ))}
                     </select>
                   </div>
@@ -1707,7 +1701,7 @@ export default function TaskManager({
               onClose={() => setChatTask(null)}
               onOpenLightbox={handleOpenLightbox}
               isModal={true}
-              teamMembers={teamMembers}
+              assignableUsers={assignableUsers}
               currentUserId={currentUserId}
             />
           </div>
@@ -1739,7 +1733,7 @@ interface TaskCardProps {
   onInlineAddSubtask: (taskId: string, title: string) => void;
   onOpenLightbox: (images: TaskImage[], index: number) => void;
   onSelectTagFilter?: (tag: string) => void;
-  assignee?: TeamMember;
+  assignee?: AssignableUser;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: (id: string) => void;
@@ -1927,10 +1921,10 @@ function TaskCard({
         {assignee && (
           <span
             className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-            style={{ backgroundColor: assignee.color }}
-            title={`Відповідальний: ${assignee.name}`}
+            style={{ backgroundColor: getAvatarColor(assignee.id) }}
+            title={`Відповідальний: ${assignee.username}`}
           >
-            {assignee.name.trim().charAt(0).toUpperCase()}
+            {assignee.username.trim().charAt(0).toUpperCase()}
           </span>
         )}
       </div>

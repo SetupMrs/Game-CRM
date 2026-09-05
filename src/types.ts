@@ -213,7 +213,11 @@ export interface Supplier {
   deletedAt?: string; // якщо задано — постачальник у кошику
 }
 
-// --- Team ---
+// --- Assignable users (real accounts, used for "who is responsible") ---
+// A lightweight view of a real user account (see UserRole in apiClient.ts) —
+// just enough to show and pick "who is this assigned to". Colors are derived
+// deterministically from the id/username at render time (see utils.ts),
+// since accounts don't store a chosen color.
 
 export const TEAM_MEMBER_COLORS: string[] = [
   "#10B981", // emerald
@@ -226,11 +230,9 @@ export const TEAM_MEMBER_COLORS: string[] = [
   "#84CC16"  // lime
 ];
 
-export interface TeamMember {
+export interface AssignableUser {
   id: string;
-  name: string;
-  role: string; // вільний текст: посада/роль в команді
-  color: string; // hex-колір аватарки, з TEAM_MEMBER_COLORS
+  username: string;
 }
 
 // --- Activity Log ---
@@ -240,7 +242,7 @@ export type ActivityEntityType = "task" | "transaction" | "supplier" | "product"
 export interface ActivityLogEntry {
   id: string;
   timestamp: string; // ISO
-  actorName: string; // ім'я члена команди на момент дії (або "Система")
+  actorName: string; // логін користувача, який виконав дію (або "Система")
   action: string; // напр. "Створив завдання", "Змінив статус"
   entityType: ActivityEntityType;
   entityTitle: string; // людяна назва того, що змінилось
@@ -273,7 +275,6 @@ export interface DatabaseState {
   tasks: Task[];
   transactions: Transaction[];
   suppliers: Supplier[];
-  teamMembers: TeamMember[];
   activityLog: ActivityLogEntry[];
   budgets: BudgetPlan[];
   taskTemplates: TaskTemplate[];

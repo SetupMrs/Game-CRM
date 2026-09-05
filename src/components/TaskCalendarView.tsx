@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
-import { Task, TASK_STATUS_CONFIGS, TeamMember } from "../types";
+import { Task, TASK_STATUS_CONFIGS, AssignableUser } from "../types";
+import { getAvatarColor } from "../utils";
 
 interface TaskCalendarViewProps {
   tasks: Task[];
-  teamMembers: TeamMember[];
+  assignableUsers: AssignableUser[];
   onSelectTask: (task: Task) => void;
 }
 
@@ -26,7 +27,7 @@ function taskDateKey(task: Task): string {
   return task.dueDate.includes("T") ? task.dueDate.split("T")[0] : task.dueDate;
 }
 
-export default function TaskCalendarView({ tasks, teamMembers, onSelectTask }: TaskCalendarViewProps) {
+export default function TaskCalendarView({ tasks, assignableUsers, onSelectTask }: TaskCalendarViewProps) {
   const today = new Date();
   const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState<string>(toDateKey(today));
@@ -43,10 +44,10 @@ export default function TaskCalendarView({ tasks, teamMembers, onSelectTask }: T
   }, [tasks]);
 
   const memberById = useMemo(() => {
-    const map: Record<string, TeamMember> = {};
-    teamMembers.forEach(m => { map[m.id] = m; });
+    const map: Record<string, AssignableUser> = {};
+    assignableUsers.forEach(m => { map[m.id] = m; });
     return map;
-  }, [teamMembers]);
+  }, [assignableUsers]);
 
   const gridDays = useMemo(() => {
     const year = viewDate.getFullYear();
@@ -175,10 +176,10 @@ export default function TaskCalendarView({ tasks, teamMembers, onSelectTask }: T
                   {assignee && (
                     <span
                       className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-                      style={{ backgroundColor: assignee.color }}
-                      title={assignee.name}
+                      style={{ backgroundColor: getAvatarColor(assignee.id) }}
+                      title={assignee.username}
                     >
-                      {assignee.name.trim().charAt(0).toUpperCase()}
+                      {assignee.username.trim().charAt(0).toUpperCase()}
                     </span>
                   )}
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border shrink-0 ${cfg?.badgeClass || ""}`}>

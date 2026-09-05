@@ -15,15 +15,14 @@ import {
   Laptop,
   CheckCircle,
   LogOut,
-  Users,
-  Bell,
-  Search,
   Trash2,
-  ShieldCheck
+  ShieldCheck,
+  Bell,
+  Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, TeamMember, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId } from "./utils";
-import { apiFetch, fetchCurrentUser, logout, AppUser, AUTH_REQUIRED_EVENT } from "./apiClient";
+import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
 import UsersManager from "./components/UsersManager";
 import TrashBin from "./components/TrashBin";
@@ -35,10 +34,8 @@ const Dashboard = lazy(() => import("./components/Dashboard"));
 const TaskManager = lazy(() => import("./components/TaskManager"));
 const FinanceManager = lazy(() => import("./components/FinanceManager"));
 const SupplierManager = lazy(() => import("./components/SupplierManager"));
-const TeamManager = lazy(() => import("./components/TeamManager"));
 
 const LOCAL_CACHE_KEY = "game_crm_srm_db_cache";
-const CURRENT_USER_KEY = "game_crm_current_user_id";
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
 const LAST_NOTIFIED_DATE_KEY = "game_crm_last_notified_date";
 const MAX_ACTIVITY_LOG_ENTRIES = 300;
@@ -57,7 +54,6 @@ const EMPTY_DB: DatabaseState = {
   tasks: [],
   transactions: [],
   suppliers: [],
-  teamMembers: [],
   activityLog: [],
   budgets: [],
   taskTemplates: [],
@@ -73,7 +69,6 @@ function normalizeDb(data: any): DatabaseState {
     tasks: data?.tasks || [],
     transactions: data?.transactions || [],
     suppliers: data?.suppliers || [],
-    teamMembers: data?.teamMembers || [],
     activityLog: data?.activityLog || [],
     budgets: data?.budgets || [],
     taskTemplates: data?.taskTemplates || [],
@@ -169,34 +164,15 @@ export default function App() {
   // Global Database State
   const [db, setDb] = useState<DatabaseState>(EMPTY_DB);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "team">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
-  // "Who am I" — attributes actions to a team member in the activity log and
-  // becomes the default assignee suggestion for new tasks. Purely local per
-  // browser; doesn't gate access (that's handled by the password, if set).
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(CURRENT_USER_KEY);
-    } catch {
-      return null;
-    }
-  });
-
-  const handleSetCurrentUser = (id: string | null) => {
-    setCurrentUserId(id);
-    try {
-      if (id) localStorage.setItem(CURRENT_USER_KEY, id);
-      else localStorage.removeItem(CURRENT_USER_KEY);
-    } catch {
-      // ignore storage errors
-    }
-  };
-
-  const currentUser = currentUserId ? (db.teamMembers || []).find(m => m.id === currentUserId) || null : null;
+  // List of real accounts, used to populate "assign to..." pickers (task
+  // assignee, dashboard workload, calendar). Loaded once after login.
+  const [assignableUsers, setAssignableUsers] = useState<BasicUser[]>([]);
 
   // Deadline notifications
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
@@ -398,6 +374,7 @@ export default function App() {
   useEffect(() => {
     if (isAuthenticated) {
       loadDatabase();
+      listBasicUsers().then(setAssignableUsers);
     }
   }, [isAuthenticated]);
 
@@ -506,11 +483,11 @@ export default function App() {
     entityTitle: string,
     details?: string
   ): ActivityLogEntry => {
-    const actor = currentUserId ? db.teamMembers.find(m => m.id === currentUserId) : null;
+    const actor = appUser?.username || "Система";
     return {
       id: generateId("log"),
       timestamp: new Date().toISOString(),
-      actorName: actor?.name || "Система",
+      actorName: actor,
       action,
       entityType,
       entityTitle,
@@ -716,7 +693,7 @@ export default function App() {
       ...db,
       tasks: db.tasks.map(t => taskIds.includes(t.id) ? { ...t, assigneeId } : t)
     };
-    const memberName = assigneeId ? db.teamMembers.find(m => m.id === assigneeId)?.name : "Не призначено";
+    const memberName = assigneeId ? assignableUsers.find(u => u.id === assigneeId)?.username : "Не призначено";
     saveStateToDisk(withLog(updated, "Масово призначив відповідального", "task", `${taskIds.length} завдань`, memberName));
   };
 
@@ -1043,42 +1020,6 @@ export default function App() {
     ));
   };
 
-  // TEAM ACTIONS
-  const handleAddTeamMember = (data: Omit<TeamMember, "id">) => {
-    const newMember: TeamMember = { ...data, id: generateId("member") };
-    const updated = {
-      ...db,
-      teamMembers: [...(db.teamMembers || []), newMember]
-    };
-    saveStateToDisk(withLog(updated, "Додав учасника команди", "team", newMember.name));
-    // If this is the first member added, offer them as "me" automatically.
-    if (!currentUserId && (db.teamMembers || []).length === 0) {
-      handleSetCurrentUser(newMember.id);
-    }
-  };
-
-  const handleUpdateTeamMember = (member: TeamMember) => {
-    const updated = {
-      ...db,
-      teamMembers: (db.teamMembers || []).map(m => m.id === member.id ? member : m)
-    };
-    saveStateToDisk(withLog(updated, "Оновив дані учасника", "team", member.name));
-  };
-
-  const handleDeleteTeamMember = (id: string) => {
-    const member = (db.teamMembers || []).find(m => m.id === id);
-    const updated = {
-      ...db,
-      teamMembers: (db.teamMembers || []).filter(m => m.id !== id),
-      // Unassign this member from any tasks they were responsible for.
-      tasks: db.tasks.map(t => t.assigneeId === id ? { ...t, assigneeId: undefined } : t)
-    };
-    saveStateToDisk(withLog(updated, "Видалив учасника команди", "team", member?.name || id));
-    if (currentUserId === id) {
-      handleSetCurrentUser(null);
-    }
-  };
-
   // BUDGET ACTIONS
   const handleAddBudget = (data: Omit<BudgetPlan, "id">) => {
     const newBudget: BudgetPlan = { ...data, id: generateId("budget") };
@@ -1241,30 +1182,6 @@ export default function App() {
                 <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-black text-[9px] font-bold rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center">
                   {trashCount > 9 ? "9+" : trashCount}
                 </span>
-              )}
-            </button>
-
-            {/* Current user ("who am I") — click to manage in the Team tab */}
-            <button
-              onClick={() => setActiveTab("team")}
-              className="flex items-center gap-1.5 bg-[#1A1A1C] hover:bg-white/5 border border-white/5 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-              title="Обрати, хто зараз працює в системі"
-            >
-              {currentUser ? (
-                <>
-                  <span
-                    className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-                    style={{ backgroundColor: currentUser.color }}
-                  >
-                    {currentUser.name.trim().charAt(0).toUpperCase()}
-                  </span>
-                  <span className="hidden md:inline text-gray-200">{currentUser.name}</span>
-                </>
-              ) : (
-                <>
-                  <Users className="w-3.5 h-3.5 text-gray-400" />
-                  <span className="hidden md:inline text-gray-400">Обрати «Я»</span>
-                </>
               )}
             </button>
 
@@ -1452,17 +1369,6 @@ export default function App() {
             <Truck className="w-4 h-4" />
             Постачальники
           </button>
-          <button
-            onClick={() => setActiveTab("team")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === "team"
-                ? "bg-emerald-600 text-white"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            Команда
-          </button>
         </div>
 
         {/* Loading Spinner */}
@@ -1503,7 +1409,7 @@ export default function App() {
                     tasks={visibleTasks}
                     transactions={visibleTransactions}
                     suppliers={visibleSuppliers}
-                    teamMembers={db.teamMembers || []}
+                    assignableUsers={assignableUsers}
                     activityLog={db.activityLog || []}
                     baseCurrency={db.baseCurrency || "USD"}
                     onAddTask={() => setActiveTab("tasks")}
@@ -1514,8 +1420,8 @@ export default function App() {
                 {activeTab === "tasks" && (
                   <TaskManager
                     tasks={visibleTasks}
-                    teamMembers={db.teamMembers || []}
-                    currentUserId={currentUserId}
+                    assignableUsers={assignableUsers}
+                    currentUserId={appUser?.id || null}
                     taskTemplates={db.taskTemplates || []}
                     suppliers={visibleSuppliers}
                     onAddTask={handleAddTask}
@@ -1563,17 +1469,6 @@ export default function App() {
                     onToggleProductAdded={handleToggleProductAdded}
                     onAddTask={handleAddTask}
                     onUpdateTask={handleUpdateTask}
-                  />
-                )}
-
-                {activeTab === "team" && (
-                  <TeamManager
-                    teamMembers={db.teamMembers || []}
-                    currentUserId={currentUserId}
-                    onAddMember={handleAddTeamMember}
-                    onUpdateMember={handleUpdateTeamMember}
-                    onDeleteMember={handleDeleteTeamMember}
-                    onSetCurrentUser={handleSetCurrentUser}
                   />
                 )}
                 </Suspense>

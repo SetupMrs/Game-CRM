@@ -23,8 +23,8 @@ import {
   Sparkles,
   Volume2
 } from "lucide-react";
-import { Task, TaskChatMessage, VoiceNote, TaskImage, TaskStatus, TASK_STATUS_CONFIGS, TeamMember } from "../types";
-import { generateId } from "../utils";
+import { Task, TaskChatMessage, VoiceNote, TaskImage, TaskStatus, TASK_STATUS_CONFIGS, AssignableUser } from "../types";
+import { generateId, getAvatarColor } from "../utils";
 import VoicePlayer from "./VoicePlayer";
 
 interface TaskDiscussionChatProps {
@@ -33,7 +33,7 @@ interface TaskDiscussionChatProps {
   onClose?: () => void;
   onOpenLightbox?: (images: TaskImage[], index: number) => void;
   isModal?: boolean;
-  teamMembers?: TeamMember[];
+  assignableUsers?: AssignableUser[];
   currentUserId?: string | null;
 }
 
@@ -50,26 +50,26 @@ export default function TaskDiscussionChat({
   onClose,
   onOpenLightbox,
   isModal = true,
-  teamMembers = [],
+  assignableUsers = [],
   currentUserId = null
 }: TaskDiscussionChatProps) {
   const messages = task.chatMessages || [];
 
   const memberById = React.useMemo(() => {
-    const map: Record<string, TeamMember> = {};
-    teamMembers.forEach(m => { map[m.id] = m; });
+    const map: Record<string, AssignableUser> = {};
+    assignableUsers.forEach(m => { map[m.id] = m; });
     return map;
-  }, [teamMembers]);
+  }, [assignableUsers]);
 
   const currentTeamMember = currentUserId ? memberById[currentUserId] : null;
 
   // Active Sender State (saved in localStorage for seamless experience).
-  // Defaults to the app-wide "current user" (team member) when one is set.
+  // Defaults to the logged-in account when one is set.
   const [senderName, setSenderName] = useState(() => {
-    return currentTeamMember?.name || localStorage.getItem("game_crm_chat_sender_name") || "Керівник";
+    return currentTeamMember?.username || localStorage.getItem("game_crm_chat_sender_name") || "Керівник";
   });
   const [senderRole, setSenderRole] = useState(() => {
-    return currentTeamMember?.role || localStorage.getItem("game_crm_chat_sender_role") || "Адміністратор";
+    return localStorage.getItem("game_crm_chat_sender_role") || "Адміністратор";
   });
   const [senderTeamMemberId, setSenderTeamMemberId] = useState<string | undefined>(() => {
     return currentTeamMember?.id || undefined;
@@ -123,12 +123,10 @@ export default function TaskDiscussionChat({
     setIsRolePickerOpen(false);
   };
 
-  const handleSelectTeamMember = (member: TeamMember) => {
-    setSenderName(member.name);
-    setSenderRole(member.role);
+  const handleSelectTeamMember = (member: AssignableUser) => {
+    setSenderName(member.username);
     setSenderTeamMemberId(member.id);
-    localStorage.setItem("game_crm_chat_sender_name", member.name);
-    localStorage.setItem("game_crm_chat_sender_role", member.role);
+    localStorage.setItem("game_crm_chat_sender_name", member.username);
     setIsRolePickerOpen(false);
   };
 
@@ -463,12 +461,12 @@ export default function TaskDiscussionChat({
 
             {isRolePickerOpen && (
               <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#18181b] border border-white/15 rounded-xl shadow-2xl p-2 z-50 animate-fadeIn space-y-1">
-                {teamMembers.length > 0 && (
+                {assignableUsers.length > 0 && (
                   <>
                     <div className="text-[10px] font-bold text-gray-400 uppercase px-2 py-1">
                       Команда:
                     </div>
-                    {teamMembers.map((member) => {
+                    {assignableUsers.map((member) => {
                       const isSelected = senderTeamMemberId === member.id;
                       return (
                         <button
@@ -482,13 +480,12 @@ export default function TaskDiscussionChat({
                           <div className="flex items-center gap-2">
                             <span
                               className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-                              style={{ backgroundColor: member.color }}
+                              style={{ backgroundColor: getAvatarColor(member.id) }}
                             >
-                              {member.name.trim().charAt(0).toUpperCase()}
+                              {member.username.trim().charAt(0).toUpperCase()}
                             </span>
-                            <span>{member.name}</span>
+                            <span>{member.username}</span>
                           </div>
-                          <span className="text-[10px] text-gray-500">{member.role}</span>
                         </button>
                       );
                     })}
@@ -634,7 +631,7 @@ export default function TaskDiscussionChat({
                       }`}
                       style={
                         msg.teamMemberId && memberById[msg.teamMemberId]
-                          ? { backgroundColor: memberById[msg.teamMemberId].color }
+                          ? { backgroundColor: getAvatarColor(msg.teamMemberId) }
                           : undefined
                       }
                     >

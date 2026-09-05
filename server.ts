@@ -244,8 +244,15 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 // ---------------------------------------------------------------------------
-// User management (admin only)
+// User management (admin only), plus a lightweight endpoint any logged-in
+// user can call to populate "assign this to..." pickers (task assignee,
+// dashboard workload, calendar) without exposing full account management.
 // ---------------------------------------------------------------------------
+app.get("/api/users/basic", requireAuth, (req, res) => {
+  const rows = sqlite.prepare("SELECT id, username FROM users ORDER BY username ASC").all();
+  res.json({ status: "success", users: rows });
+});
+
 app.get("/api/users", requireAuth, requireAdmin, (req, res) => {
   const rows = sqlite.prepare("SELECT id, username, role, created_at as createdAt FROM users ORDER BY created_at ASC").all();
   res.json({ status: "success", users: rows });
@@ -325,13 +332,12 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
 const DEFAULT_CURRENCY_RATES = { USD: 1, RUB: 0.0105, UAH: 0.024 };
 const DEFAULT_BASE_CURRENCY = "USD";
 
-const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "teamMembers", "activityLog", "budgets", "taskTemplates"] as const;
+const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "activityLog", "budgets", "taskTemplates"] as const;
 
 const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
   tasks: "tasks",
   transactions: "transactions",
   suppliers: "suppliers",
-  teamMembers: "team_members",
   activityLog: "activity_log",
   budgets: "budgets",
   taskTemplates: "task_templates"

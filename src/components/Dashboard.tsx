@@ -27,15 +27,15 @@ import {
   Users,
   Activity
 } from "lucide-react";
-import { Task, Transaction, Supplier, TeamMember, ActivityLogEntry } from "../types";
-import { formatDate } from "../utils";
+import { Task, Transaction, Supplier, AssignableUser, ActivityLogEntry } from "../types";
+import { formatDate, getAvatarColor } from "../utils";
 import ActivityFeed from "./ActivityFeed";
 
 interface DashboardProps {
   tasks: Task[];
   transactions: Transaction[];
   suppliers?: Supplier[];
-  teamMembers?: TeamMember[];
+  assignableUsers?: AssignableUser[];
   activityLog?: ActivityLogEntry[];
   baseCurrency?: string;
   onAddTask: () => void;
@@ -46,7 +46,7 @@ export default function Dashboard({
   tasks,
   transactions = [],
   suppliers = [],
-  teamMembers = [],
+  assignableUsers = [],
   activityLog = [],
   baseCurrency = "USD",
   onAddTask,
@@ -83,13 +83,13 @@ export default function Dashboard({
   // Team workload: active + overdue task counts per member, for the widget below.
   const teamWorkload = useMemo(() => {
     const todayStr = new Date().toISOString().split("T")[0];
-    return teamMembers.map(member => {
+    return assignableUsers.map(member => {
       const memberTasks = tasks.filter(t => t.assigneeId === member.id);
       const active = memberTasks.filter(t => t.status !== "Completed" && t.status !== "Cancelled");
       const overdue = active.filter(t => t.dueDate < todayStr);
       return { member, activeCount: active.length, overdueCount: overdue.length };
     });
-  }, [tasks, teamMembers]);
+  }, [tasks, assignableUsers]);
 
   // New states for the custom Executed Work & Tasks widget
   const [executedSearch, setExecutedSearch] = useState("");
@@ -662,7 +662,7 @@ export default function Dashboard({
   return (
     <div className="space-y-6">
       {/* Team workload & Activity feed */}
-      {(teamMembers.length > 0 || activityLog.length > 0) && (
+      {(assignableUsers.length > 0 || activityLog.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Team workload */}
           <div className="bg-[#111112] border border-white/5 rounded-2xl p-4 sm:p-5 space-y-3 shadow-lg">
@@ -687,11 +687,11 @@ export default function Dashboard({
                   <div key={member.id} className="flex items-center gap-3">
                     <span
                       className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                      style={{ backgroundColor: member.color }}
+                      style={{ backgroundColor: getAvatarColor(member.id) }}
                     >
-                      {member.name.trim().charAt(0).toUpperCase()}
+                      {member.username.trim().charAt(0).toUpperCase()}
                     </span>
-                    <span className="text-xs text-gray-300 flex-1 truncate">{member.name}</span>
+                    <span className="text-xs text-gray-300 flex-1 truncate">{member.username}</span>
                     <span className="text-[11px] font-mono text-gray-400">{activeCount} активних</span>
                     {overdueCount > 0 && (
                       <span className="text-[10px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded-md">
