@@ -1027,7 +1027,7 @@ export default function FinanceManager({
               </div>
 
               {/* Amount & Currency & Date */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Сума *</label>
                   <input
@@ -1054,7 +1054,7 @@ export default function FinanceManager({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Дата транзакції *</label>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Дата *</label>
                   <div 
                     onClick={(e) => {
                       const input = (e.currentTarget.querySelector("input") as HTMLInputElement);
@@ -1145,7 +1145,7 @@ export default function FinanceManager({
 
               {/* Bank / Payment Method */}
               <div>
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Банк з якого була оплата</label>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Банк оплати</label>
                 <input
                   type="text"
                   placeholder="напр. Монобанк, ПриватБанк, Готівка..."
@@ -1159,7 +1159,7 @@ export default function FinanceManager({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
-                    Пов'язане завдання (опціонально)
+                    Завдання
                   </label>
                   <select
                     value={newTx.taskId}
@@ -1174,7 +1174,7 @@ export default function FinanceManager({
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
-                    Пов'язаний постачальник (опціонально)
+                    Постачальник
                   </label>
                   <select
                     value={newTx.supplierId}
@@ -1191,7 +1191,7 @@ export default function FinanceManager({
 
               {/* Description */}
               <div>
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Призначення платежу / Опис *</label>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Опис *</label>
                 <textarea
                   required
                   rows={2}
