@@ -1137,7 +1137,7 @@ export default function SupplierManager({
 
         {/* Products */}
         <div className="bg-[#111112] p-4 rounded-xl border border-white/5 flex flex-col justify-between h-24">
-          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Усього категорій товарів</p>
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Усього товарів</p>
           <div className="flex items-baseline justify-between mt-1">
             <h2 className="text-2xl font-bold text-emerald-400 font-mono">{stats.totalProds}</h2>
             <span className="text-[10px] text-emerald-400">По всіх джерелах</span>
@@ -1231,7 +1231,7 @@ export default function SupplierManager({
                       </p>
                       <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-gray-500 bg-white/[0.02] border border-white/5 px-1.5 py-0.5 rounded-sm">
                         <Layers className="w-2.5 h-2.5 text-emerald-400/75" />
-                        Категорій: {supplier.products?.length || 0}
+                        Товарів: {supplier.products?.length || 0}
                       </span>
                     </div>
 
@@ -1403,10 +1403,10 @@ export default function SupplierManager({
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-white/5 pb-3">
                   <div>
                     <h4 className="font-bold text-white text-sm flex items-center gap-1.5">
-                      <span>📚 Каталог {selectedSupplier.name} — тисни категорію</span>
+                      <span>📦 Товари постачальника {selectedSupplier.name}</span>
                     </h4>
                     <p className="text-[11px] text-gray-400 mt-1">
-                      Знайдено <span className="text-emerald-400 font-bold font-mono">{(selectedSupplier.products || []).length}</span> категорій із <span className="text-emerald-400 font-bold font-mono">{supplierCurrenciesCount}</span> валют/регіонів. Клік → змінює статус вибору.
+                      Знайдено <span className="text-emerald-400 font-bold font-mono">{(selectedSupplier.products || []).length}</span> товарів, <span className="text-emerald-400 font-bold font-mono">{supplierCurrenciesCount}</span> регіонів. Клікніть на товар, щоб переглянути номінали.
                     </p>
                   </div>
 
@@ -1416,7 +1416,7 @@ export default function SupplierManager({
                       className="text-[11px] bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 cursor-pointer border border-emerald-500/30 transition-all w-full sm:w-auto justify-center"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Додати категорію
+                      Додати товар
                     </button>
                   </div>
                 </div>
@@ -1636,7 +1636,7 @@ export default function SupplierManager({
                       <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-gray-500" />
                       <input
                         type="text"
-                        placeholder="Пошук категорії чи коду..."
+                        placeholder="Пошук товару чи коду..."
                         value={catalogSearchQuery}
                         onChange={(e) => setCatalogSearchQuery(e.target.value)}
                         className="w-full sm:w-56 pl-8 pr-7 py-1 text-xs border border-white/10 rounded-md focus:outline-hidden focus:border-emerald-500 bg-black/40 text-white font-medium"
@@ -1651,7 +1651,7 @@ export default function SupplierManager({
                       )}
                     </div>
                     <span className="hidden xl:inline text-[10px] text-gray-500 font-mono italic">
-                      * Клікніть для перемикання "Виконано / Не виконано"
+                      * Клікніть на товар, щоб переглянути номінали
                     </span>
                   </div>
                 </div>
@@ -1662,341 +1662,105 @@ export default function SupplierManager({
                     Каталог порожній. Натисніть "Додати товар", щоб заповнити список.
                   </div>
                 ) : (
-                  <div className="flex flex-wrap gap-2.5 pt-1.5">
+                  <div className="space-y-1.5 pt-1.5">
                     <AnimatePresence>
-                      {paginatedProducts.map((prod) => {
-                        const isAdded = prod.isAdded;
-                        const matchingItems = catalogSearchQuery.trim()
-                          ? (prod.items || []).filter(item => 
-                              (item.title && item.title.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase())) ||
-                              (item.code && item.code.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase()))
-                            )
-                          : [];
-
-                        return (
-                          <motion.div
-                            layout
-                            key={prod.id}
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            transition={{ duration: 0.15 }}
-                            className="relative group shrink-0 flex flex-col items-start gap-1"
-                          >
-                            {/* Nested Capsule grouping Main Pill and Task integration */}
-                            <div className={`flex items-center p-0.5 rounded-full border transition-all duration-200 gap-1.5 ${
-                              isAdded
-                                ? "bg-emerald-500/5 border-emerald-500/30 shadow-xs"
-                                : "bg-[#161618]/90 border-white/10 hover:border-white/20"
-                            }`}>
-                              {/* Main Button Pill */}
-                              <button
-                                onClick={() => handleToggleCategory(prod.id)}
-                                className="flex items-center pl-3.5 pr-2 py-1 text-xs font-semibold tracking-wide cursor-pointer text-left gap-2"
+                      {paginatedProducts.map((prod) => (
+                        <motion.div
+                          layout
+                          key={prod.id}
+                          initial={{ opacity: 0, y: -4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.15 }}
+                          onClick={() => handleOpenItemsModal(prod)}
+                          className="group flex items-center gap-3 bg-[#161618] hover:bg-[#1b1b1e] border border-white/5 hover:border-white/15 rounded-lg px-3.5 py-2.5 cursor-pointer transition-colors"
+                        >
+                          <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-gray-100 truncate">{prod.title}</span>
+                            <span
+                              className="px-1.5 py-0.5 rounded-xs font-black text-[9px] uppercase tracking-wider shrink-0 bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                              title="Регіон"
+                            >
+                              {prod.currency || "GLOBAL"}
+                            </span>
+                            {prod.platform && prod.platform.split(',').map(p => p.trim()).filter(Boolean).map((plat) => (
+                              <span
+                                key={plat}
+                                className="px-1.5 py-0.5 rounded-xs font-bold text-[9px] uppercase tracking-wider shrink-0 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono"
+                                title="Платформа"
                               >
-                                {/* Left status symbol inside the pill */}
-                                <span className="flex items-center shrink-0">
-                                  {isAdded ? (
-                                    <CheckCircle className="w-4 h-4 text-emerald-400" />
-                                  ) : (
-                                    <Circle className="w-4 h-4 text-gray-500 hover:text-gray-400" />
-                                  )}
-                                </span>
+                                {plat}
+                              </span>
+                            ))}
+                          </div>
 
-                                {/* Title / Name */}
-                                <span className="truncate max-w-[200px] sm:max-w-[320px] text-[11px] font-medium leading-none text-gray-200">
-                                  {prod.title}
-                                </span>
-
-                                {/* High-Fidelity Region Badge */}
-                                <span 
-                                  className={`px-1.5 py-0.5 rounded-xs font-black text-[9px] uppercase tracking-wider shrink-0 transition-all ${
-                                    isAdded
-                                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                      : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                  }`}
-                                  title="Регіон"
+                          {/* Price badge with inline editor + history tooltip */}
+                          {onUpdateProduct && (
+                            <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+                              {editingPriceProductId === prod.id ? (
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const num = parseFloat(priceDraft);
+                                    if (!isNaN(num) && num >= 0) {
+                                      onUpdateProduct(selectedSupplier.id, prod.id, { ...prod, price: num });
+                                    }
+                                    setEditingPriceProductId(null);
+                                  }}
                                 >
-                                  {prod.currency || "USD"}
-                                </span>
-
-                                {prod.platform && prod.platform.split(',').map(p => p.trim()).filter(Boolean).map((plat) => (
-                                  <span 
-                                    key={plat}
-                                    className="px-1.5 py-0.5 rounded-xs font-bold text-[9px] uppercase tracking-wider shrink-0 transition-all bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono"
-                                    title="Платформа"
-                                  >
-                                    {plat}
-                                  </span>
-                                ))}
-                              </button>
-
-                              {/* Price badge with inline editor + history tooltip */}
-                              {onUpdateProduct && (
-                                <div
-                                  className="relative shrink-0"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {editingPriceProductId === prod.id ? (
-                                    <form
-                                      onSubmit={(e) => {
-                                        e.preventDefault();
-                                        const num = parseFloat(priceDraft);
-                                        if (!isNaN(num) && num >= 0) {
-                                          onUpdateProduct(selectedSupplier.id, prod.id, { ...prod, price: num });
-                                        }
-                                        setEditingPriceProductId(null);
-                                      }}
-                                      className="flex items-center gap-1"
-                                    >
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
-                                        autoFocus
-                                        value={priceDraft}
-                                        onChange={(e) => setPriceDraft(e.target.value)}
-                                        onBlur={() => setEditingPriceProductId(null)}
-                                        className="w-16 px-1.5 py-0.5 text-[10px] font-mono bg-black/40 border border-emerald-500/40 rounded text-white focus:outline-hidden"
-                                      />
-                                    </form>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setPriceDraft(prod.price !== undefined ? String(prod.price) : "");
-                                        setEditingPriceProductId(prod.id);
-                                      }}
-                                      className="px-1.5 py-0.5 rounded-xs font-mono font-bold text-[9px] shrink-0 transition-all bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer"
-                                      title={
-                                        prod.priceHistory && prod.priceHistory.length > 0
-                                          ? `Історія цін:\n${prod.priceHistory.map(h => `${h.price} ${h.currency || prod.currency || ""} — ${formatDate(h.changedAt)}`).join("\n")}`
-                                          : "Натисніть, щоб задати ціну"
-                                      }
-                                    >
-                                      {prod.price !== undefined ? `${prod.price} ${prod.currency || ""}` : "Ціна?"}
-                                      {prod.priceHistory && prod.priceHistory.length > 0 && (
-                                        <span className="ml-1 text-gray-500">({prod.priceHistory.length})</span>
-                                      )}
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Open items manager action */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenItemsModal(prod);
-                                }}
-                                className="p-1 rounded-full border border-emerald-500/15 hover:border-emerald-500/40 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer transition-all flex items-center justify-center gap-1.5 px-2.5 bg-emerald-500/5 font-bold shrink-0"
-                                title="Відкрити та управляти кодами/товарами"
-                              >
-                                <Database className="w-3 h-3 text-emerald-400" />
-                                <span className="text-[8.5px] font-bold font-mono">
-                                  Товари ({(prod.items || []).length})
-                                </span>
-                              </button>
-
-                              {/* Divider inside capsule */}
-                              <div className="h-4 w-[1px] bg-white/10 shrink-0" />
-
-                              {/* Task companion action */}
-                              {(() => {
-                                const task = getLinkedTask(prod.title, selectedSupplier.name);
-                                if (task) {
-                                  const isCompleted = task.status === "Completed";
-                                  const isInProgress = task.status === "In Progress";
-                                  
-                                  let badgeBg = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
-                                  let statusLabel = "Завдання створено (В очікуванні)";
-                                  if (isInProgress) {
-                                    badgeBg = "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse";
-                                    statusLabel = "Завдання виконується (В процесі)";
-                                  } else if (isCompleted) {
-                                    badgeBg = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-                                    statusLabel = "Завдання завершено!";
-                                  }
-
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleToggleTaskStatusLocal(task);
-                                      }}
-                                      className={`p-1 mr-1.5 rounded-full border cursor-pointer transition-all hover:scale-105 flex items-center justify-center gap-1 px-2.5 shrink-0 ${badgeBg}`}
-                                      title={`${statusLabel}. Натисніть для зміни статусу.`}
-                                    >
-                                      <ClipboardList className="w-3 h-3" />
-                                      <span className="text-[8px] font-bold font-mono">
-                                        {task.status === "Pending" ? "В очік." : task.status === "In Progress" ? "В роб." : "Готово"}
-                                      </span>
-                                    </button>
-                                  );
-                                } else {
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleCreateTaskForCategory(prod, selectedSupplier.name);
-                                      }}
-                                      className="p-1 mr-1.5 rounded-full border border-white/5 hover:border-emerald-500/30 text-gray-500 hover:text-emerald-300 hover:bg-emerald-500/5 cursor-pointer transition-all flex items-center justify-center gap-1 px-2.5 shrink-0"
-                                      title="Створити завдання для цього товару"
-                                    >
-                                      <Plus className="w-2 h-2 text-emerald-400" />
-                                      <ClipboardList className="w-3 h-3" />
-                                    </button>
-                                  );
-                                }
-                              })()}
-                            </div>
-
-                            {/* Matching individual items listing when searching */}
-                            {matchingItems.length > 0 && (
-                              <div className="mt-1 w-full bg-[#161618] border border-emerald-500/15 rounded-xl p-2.5 space-y-1.5 max-w-[320px] sm:max-w-[400px] shadow-lg animate-fade-in text-left">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    autoFocus
+                                    value={priceDraft}
+                                    onChange={(e) => setPriceDraft(e.target.value)}
+                                    onBlur={() => setEditingPriceProductId(null)}
+                                    className="w-16 px-1.5 py-0.5 text-[10px] font-mono bg-black/40 border border-emerald-500/40 rounded text-white focus:outline-hidden"
+                                  />
+                                </form>
+                              ) : (
                                 <button
                                   type="button"
-                                  onClick={() => handleOpenItemsModal(prod)}
-                                  className="w-full text-left text-[9px] text-emerald-400 font-bold uppercase tracking-wider mb-1 flex items-center justify-between hover:text-emerald-300 transition-colors cursor-pointer focus:outline-hidden"
-                                  title="Відкрити детальний список товарів"
+                                  onClick={() => {
+                                    setPriceDraft(prod.price !== undefined ? String(prod.price) : "");
+                                    setEditingPriceProductId(prod.id);
+                                  }}
+                                  className="px-2 py-1 rounded-lg font-mono font-bold text-[10px] shrink-0 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer"
+                                  title={
+                                    prod.priceHistory && prod.priceHistory.length > 0
+                                      ? `Історія цін:\n${prod.priceHistory.map(h => `${h.price} ${h.currency || prod.currency || ""} — ${formatDate(h.changedAt)}`).join("\n")}`
+                                      : "Натисніть, щоб задати ціну"
+                                  }
                                 >
-                                  <span className="flex items-center gap-1">
-                                    <Database className="w-3 h-3 text-emerald-400" />
-                                    Знайдені товари ({matchingItems.length}):
-                                  </span>
-                                  <span className="text-[8px] text-emerald-400 font-black flex items-center gap-0.5 font-mono animate-pulse bg-emerald-500/10 px-1.5 py-0.5 rounded-sm">
-                                    ДЕТАЛЬНІШЕ ↗
-                                  </span>
+                                  {prod.price !== undefined ? `${prod.price} ${prod.currency || ""}` : "Ціна?"}
+                                  {prod.priceHistory && prod.priceHistory.length > 0 && (
+                                    <span className="ml-1 text-gray-500">({prod.priceHistory.length})</span>
+                                  )}
                                 </button>
-                                <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                                  {matchingItems.map(item => {
-                                    const isItemAdded = !!item.isAdded;
-                                    return (
-                                      <div 
-                                        key={item.id} 
-                                        className={`flex items-center justify-between gap-3 px-2 py-1.5 rounded-lg border text-left transition-all ${
-                                          isItemAdded 
-                                            ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-300" 
-                                            : "bg-black/20 border-white/5 text-gray-300"
-                                        }`}
-                                      >
-                                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                                          <button 
-                                            type="button"
-                                            onClick={() => handleToggleItemAddedForProduct(prod.id, item.id)}
-                                            className="focus:outline-hidden hover:scale-115 transition-transform cursor-pointer shrink-0"
-                                            title="Позначити виконаним"
-                                          >
-                                            {isItemAdded ? (
-                                              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                                            ) : (
-                                              <Circle className="w-3.5 h-3.5 text-gray-500 hover:text-gray-400" />
-                                            )}
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => handleOpenItemsModal(prod)}
-                                            className="flex flex-col min-w-0 text-left cursor-pointer group/item hover:text-emerald-400 transition-colors focus:outline-hidden flex-1"
-                                            title="Натисніть для переходу до детального списку"
-                                          >
-                                            <span className="text-[10px] font-medium truncate group-hover/item:underline" title={item.title || prod.title}>
-                                              {item.title || prod.title}
-                                            </span>
-                                            <span className="text-[8.5px] font-mono text-gray-500 font-bold select-all leading-none mt-0.5 flex items-center gap-1">
-                                              <span>{item.code}</span>
-                                              <span className="opacity-0 group-hover/item:opacity-100 text-[7px] text-emerald-400 uppercase font-black tracking-widest transition-opacity">
-                                                (ПЕРЕЙТИ ↗)
-                                              </span>
-                                            </span>
-                                          </button>
-                                        </div>
-                                        
-                                        <div className="flex items-center gap-1.5 shrink-0">
-                                          {/* Copy code button */}
-                                          <button
-                                            type="button"
-                                            onClick={() => handleCopyCode(item.code, item.id)}
-                                            className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold transition-all cursor-pointer ${
-                                              copiedItemId === item.id 
-                                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" 
-                                                : "bg-white/5 text-gray-400 hover:text-white hover:bg-white/10"
-                                            }`}
-                                          >
-                                            {copiedItemId === item.id ? "Коп." : "Коп."}
-                                          </button>
+                              )}
+                            </div>
+                          )}
 
-                                          {/* Task status companion */}
-                                          {(() => {
-                                            const itemTaskTitle = item.title || `${prod.title} (Код: ${item.code})`;
-                                            const task = (tasks || []).find(
-                                              t => (t.title.includes(itemTaskTitle) && t.counterparty === selectedSupplier.name) ||
-                                                   (t.description?.includes(item.code) && t.counterparty === selectedSupplier.name)
-                                            );
-                                            if (task) {
-                                              const isCompleted = task.status === "Completed";
-                                              const isInProgress = task.status === "In Progress";
-                                              
-                                              let badgeBg = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
-                                              if (isInProgress) {
-                                                badgeBg = "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse";
-                                              } else if (isCompleted) {
-                                                badgeBg = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-                                              }
+                          {/* Denominations count — click opens the same modal as the row */}
+                          <span className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/5 border border-emerald-500/15 text-emerald-400 text-[11px] font-bold font-mono">
+                            <Database className="w-3 h-3" />
+                            {(prod.items || []).length}
+                          </span>
 
-                                              return (
-                                                <button
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleToggleTaskStatusLocal(task);
-                                                  }}
-                                                  className={`px-1.5 py-0.5 rounded text-[7.5px] font-bold border cursor-pointer transition-all hover:scale-105 shrink-0 ${badgeBg}`}
-                                                  title="Змінити статус завдання"
-                                                >
-                                                  {task.status === "Pending" ? "В очік." : task.status === "In Progress" ? "В роб." : "Готово"}
-                                                </button>
-                                              );
-                                            } else {
-                                              return (
-                                                <button
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleCreateTaskForItem(item, prod.title, selectedSupplier.name);
-                                                  }}
-                                                  className="p-1 rounded border border-white/5 hover:border-emerald-500/30 text-gray-500 hover:text-emerald-300 hover:bg-emerald-500/5 cursor-pointer transition-all flex items-center justify-center shrink-0"
-                                                  title="Створити завдання"
-                                                >
-                                                  <ClipboardList className="w-3 h-3" />
-                                                </button>
-                                              );
-                                            }
-                                          })()}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Delete overlay button - visible on hover, immediate deletion without blocking popups */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteProduct(selectedSupplier.id, prod.id);
-                              }}
-                              className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-600 text-white flex items-center justify-center text-[9px] hover:bg-red-700 font-bold opacity-0 group-hover:opacity-100 transition-opacity shadow-lg cursor-pointer border border-red-500/20"
-                              title="Видалити"
-                            >
-                              ×
-                            </button>
-                          </motion.div>
-                        );
-                      })}
+                          {/* Delete */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteProduct(selectedSupplier.id, prod.id);
+                            }}
+                            className="shrink-0 p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                            title="Видалити товар"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </motion.div>
+                      ))}
                     </AnimatePresence>
                   </div>
                 )}
