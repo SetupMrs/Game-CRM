@@ -485,8 +485,18 @@ app.get("/api/suppliers/letskeys/products", requireAuth, async (req, res) => {
       return res.status(502).json({ status: "error", message: `LetsKeys повернув помилку: ${response.status}` });
     }
     const data = await response.json();
-    letsKeysProductsCache = { data, fetchedAt: Date.now() };
-    res.json({ status: "success", products: data });
+    // LetsKeys may return either a bare array of products, or an object
+    // wrapping the array (e.g. { products: [...] }) — normalize both shapes
+    // to a plain array so the frontend never has to guess.
+    const productsList: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.products)
+      ? data.products
+      : Array.isArray(data?.data)
+      ? data.data
+      : [];
+    letsKeysProductsCache = { data: productsList, fetchedAt: Date.now() };
+    res.json({ status: "success", products: productsList });
   } catch (error: any) {
     console.error("LetsKeys products fetch failed:", error);
     const message = error?.name === "TimeoutError" ? "LetsKeys не відповів за 15 секунд." : "Не вдалося з'єднатися з LetsKeys.";
