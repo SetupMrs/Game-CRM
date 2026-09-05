@@ -9,9 +9,6 @@ import {
   AlertCircle,
   Wallet,
   Truck,
-  Download,
-  Upload,
-  Save,
   Laptop,
   CheckCircle,
   LogOut,
@@ -413,63 +410,6 @@ export default function App() {
         message: "Не вдалося зберегти зміни на сервері. Перевірте з'єднання."
       });
     }
-  };
-
-  // Export database to PC as file
-  const handleExportDatabase = () => {
-    try {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(db, null, 2));
-      const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `game_crm_srm_backup_${new Date().toISOString().split("T")[0]}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-      setBackupFeedback({
-        type: "success",
-        message: "Базу даних скачано у файл на ваш ПК!"
-      });
-    } catch (err) {
-      console.error("Export failed:", err);
-      setBackupFeedback({
-        type: "error",
-        message: "Не вдалося експортувати базу даних на ПК."
-      });
-    }
-  };
-
-  // Import database from file on PC
-  const handleImportDatabase = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const fileReader = new FileReader();
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    fileReader.onload = (e) => {
-      try {
-        const parsedData = JSON.parse(e.target?.result as string);
-        if (parsedData && (parsedData.tasks || parsedData.transactions || parsedData.suppliers)) {
-          const updated: DatabaseState = normalizeDb(parsedData);
-          saveStateToDisk(updated);
-          setBackupFeedback({
-            type: "success",
-            message: "Базу даних успішно імпортовано з файлу на ПК!"
-          });
-        } else {
-          setBackupFeedback({
-            type: "error",
-            message: "Невірний формат файлу резервної копії JSON."
-          });
-        }
-      } catch (err) {
-        console.error("Error parsing backup file:", err);
-        setBackupFeedback({
-          type: "error",
-          message: "Помилка читання файлу. Перевірте формат JSON."
-        });
-      }
-    };
-    fileReader.readAsText(file);
-    event.target.value = ""; // clear
   };
 
   // TASK ACTIONS
@@ -1184,32 +1124,6 @@ export default function App() {
                 </span>
               )}
             </button>
-
-            {/* File Backup Actions for PC */}
-            <div className="flex items-center gap-1.5 border-l border-white/10 pl-2.5 sm:pl-4">
-              <button
-                onClick={handleExportDatabase}
-                className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm shadow-emerald-900/30"
-                title="Зберегти копію бази даних (.json) на ПК"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Зберегти</span>
-              </button>
-              
-              <label
-                className="flex items-center gap-1 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer"
-                title="Імпортувати копію бази даних (.json) з ПК"
-              >
-                <Upload className="w-3.5 h-3.5 text-gray-400" />
-                <span className="hidden sm:inline">Завантажити</span>
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImportDatabase}
-                  className="hidden"
-                />
-              </label>
-            </div>
 
             {/* Reload button */}
             <button 
