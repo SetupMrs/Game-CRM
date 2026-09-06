@@ -2020,6 +2020,18 @@ function TaskCard({
           </span>
         </div>
       </div>
+
+      {/* Accept — only shown while pending, disappears the moment it's accepted */}
+      {task.status === "Pending" && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onSetStatus(task.id, "Accepted"); }}
+          className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-1.5 rounded-lg cursor-pointer transition-colors"
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          Прийняти завдання
+        </button>
+      )}
     </div>
   );
 }
