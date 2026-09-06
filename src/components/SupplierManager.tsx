@@ -579,10 +579,6 @@ export default function SupplierManager({
   const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
   const [modalSearchQuery, setModalSearchQuery] = useState("");
 
-  // Inline price editor (per product pill) — records price history on save.
-  const [editingPriceProductId, setEditingPriceProductId] = useState<string | null>(null);
-  const [priceDraft, setPriceDraft] = useState("");
-
   // Open Items Manager Modal and initialize inputs
   const handleOpenItemsModal = (prod: ProductCard) => {
     setSelectedCategoryForItems(prod);
@@ -1694,54 +1690,6 @@ export default function SupplierManager({
                             ))}
                           </div>
 
-                          {/* Price badge with inline editor + history tooltip */}
-                          {onUpdateProduct && (
-                            <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
-                              {editingPriceProductId === prod.id ? (
-                                <form
-                                  onSubmit={(e) => {
-                                    e.preventDefault();
-                                    const num = parseFloat(priceDraft);
-                                    if (!isNaN(num) && num >= 0) {
-                                      onUpdateProduct(selectedSupplier.id, prod.id, { ...prod, price: num });
-                                    }
-                                    setEditingPriceProductId(null);
-                                  }}
-                                >
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    autoFocus
-                                    value={priceDraft}
-                                    onChange={(e) => setPriceDraft(e.target.value)}
-                                    onBlur={() => setEditingPriceProductId(null)}
-                                    className="w-16 px-1.5 py-0.5 text-[10px] font-mono bg-black/40 border border-emerald-500/40 rounded text-white focus:outline-hidden"
-                                  />
-                                </form>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPriceDraft(prod.price !== undefined ? String(prod.price) : "");
-                                    setEditingPriceProductId(prod.id);
-                                  }}
-                                  className="px-2 py-1 rounded-lg font-mono font-bold text-[10px] shrink-0 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer"
-                                  title={
-                                    prod.priceHistory && prod.priceHistory.length > 0
-                                      ? `Історія цін:\n${prod.priceHistory.map(h => `${h.price} ${h.currency || prod.currency || ""} — ${formatDate(h.changedAt)}`).join("\n")}`
-                                      : "Натисніть, щоб задати ціну"
-                                  }
-                                >
-                                  {prod.price !== undefined ? `${prod.price} ${prod.currency || ""}` : "Ціна?"}
-                                  {prod.priceHistory && prod.priceHistory.length > 0 && (
-                                    <span className="ml-1 text-gray-500">({prod.priceHistory.length})</span>
-                                  )}
-                                </button>
-                              )}
-                            </div>
-                          )}
-
                           {/* Denominations count — click opens the same modal as the row */}
                           <span className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/5 border border-emerald-500/15 text-emerald-400 text-[11px] font-bold font-mono">
                             <Database className="w-3 h-3" />
@@ -2142,6 +2090,21 @@ export default function SupplierManager({
                                     <span className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm shrink-0">
                                       {displayCurrency}
                                     </span>
+                                    {typeof item.price === "number" && (
+                                      <span
+                                        className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-sm shrink-0"
+                                        title={
+                                          item.priceHistory && item.priceHistory.length > 0
+                                            ? `Історія цін:\n${item.priceHistory.map(h => `${h.price} ${h.currency || displayCurrency} — ${formatDate(h.changedAt)}`).join("\n")}`
+                                            : undefined
+                                        }
+                                      >
+                                        {item.price} {displayCurrency}
+                                        {item.priceHistory && item.priceHistory.length > 0 && (
+                                          <span className="text-emerald-500/70"> ({item.priceHistory.length})</span>
+                                        )}
+                                      </span>
+                                    )}
                                     <MultiPlatformSelector
                                       value={item.platform || currentCategory.platform}
                                       onChange={(val) => handleUpdateItemPlatform(item.id, val)}

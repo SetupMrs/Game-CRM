@@ -1101,7 +1101,7 @@ export default function App() {
         const existingItem = itemByExternalId[extId];
 
         if (existingItem) {
-          let finalItem: CategoryItem = { ...existingItem, externalInStock: v.in_stock, lastSyncedAt: now };
+          let finalItem: CategoryItem = { ...existingItem, currency: existingItem.currency || "USD", externalInStock: v.in_stock, lastSyncedAt: now };
           if (typeof existingItem.price === "number" && existingItem.price !== v.price) {
             const historyEntry: PriceHistoryEntry = {
               id: generateId("price"),
@@ -1124,6 +1124,7 @@ export default function App() {
             code: extId,
             title: v.name,
             price: v.price,
+            currency: "USD", // LetsKeys quotes prices in USD, no currency field in their response
             status: "Available",
             createdAt: now,
             externalVariationId: extId,
