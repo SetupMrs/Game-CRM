@@ -1937,6 +1937,7 @@ function TaskCard({
   onToggleSelect
 }: TaskCardProps) {
   const isOverdue = task.status !== "Completed" && task.status !== "Cancelled" && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
+  const statusConfig = TASK_STATUS_CONFIGS[task.status] || TASK_STATUS_CONFIGS["Pending"];
 
   return (
     <div
@@ -1972,6 +1973,12 @@ function TaskCard({
       >
         <Trash2 className="w-3 h-3" />
       </button>
+
+      {/* Status */}
+      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold border ${statusConfig.badgeClass}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${statusConfig.dotClass}`}></span>
+        {statusConfig.label}
+      </span>
 
       {/* Title */}
       <p className={`text-xs font-semibold pr-5 leading-snug ${
