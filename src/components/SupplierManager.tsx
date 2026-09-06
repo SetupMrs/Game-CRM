@@ -2022,16 +2022,7 @@ export default function SupplierManager({
                         className="w-full px-3 py-2 text-xs border border-white/10 rounded-lg focus:outline-hidden focus:border-indigo-500 bg-[#0E0E0F] text-white uppercase font-bold font-mono"
                       />
                     </div>
-                    <div className="md:col-span-3">
-                      <label className="block text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Платформи (можна декілька)</label>
-                      <MultiPlatformSelector
-                        value={newItemPlatform}
-                        onChange={(val) => setNewItemPlatform(val)}
-                        size="sm"
-                        className="mt-1"
-                      />
-                    </div>
-                    <div className="md:col-span-1 flex">
+                    <div className="md:col-span-4 flex">
                       <button
                         type="submit"
                         className="w-full h-[34px] bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold cursor-pointer flex items-center justify-center transition-colors"
@@ -2043,15 +2034,6 @@ export default function SupplierManager({
                   </form>
                 ) : (
                   <form onSubmit={handleBatchAddItemsToCategory} className="space-y-3">
-                    <div className="w-full">
-                      <label className="block text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Платформи для імпорту (можна декілька)</label>
-                      <MultiPlatformSelector
-                        value={newItemPlatform}
-                        onChange={(val) => setNewItemPlatform(val)}
-                        size="sm"
-                        className="mt-1"
-                      />
-                    </div>
                     <textarea
                       rows={4}
                       required
