@@ -5,7 +5,7 @@ import { fetchLetsKeysProducts, fetchLetsKeysVariations, LetsKeysProduct, LetsKe
 interface LetsKeysSyncModalProps {
   supplierId: string;
   onClose: () => void;
-  onImport: (supplierId: string, jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]) => { addedCount: number; updatedCount: number; priceChangedCount: number };
+  onImport: (supplierId: string, jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]) => Promise<{ addedCount: number; updatedCount: number; priceChangedCount: number; success: boolean }>;
 }
 
 interface BulkSummary {
@@ -13,6 +13,7 @@ interface BulkSummary {
   updatedCount: number;
   priceChangedCount: number;
   failedCount: number;
+  saveFailed?: boolean;
 }
 
 export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: LetsKeysSyncModalProps) {
@@ -35,7 +36,7 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
   const [variationsError, setVariationsError] = useState<string | null>(null);
   const [variations, setVariations] = useState<LetsKeysVariation[]>([]);
   const [isImporting, setIsImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ addedCount: number; updatedCount: number; priceChangedCount: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ addedCount: number; updatedCount: number; priceChangedCount: number; success: boolean } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -127,10 +128,16 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, () => worker()));
 
     const summary = collected.length > 0
-      ? onImport(supplierId, collected)
-      : { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
+      ? await onImport(supplierId, collected)
+      : { addedCount: 0, updatedCount: 0, priceChangedCount: 0, success: true };
 
-    setBulkResult({ ...summary, failedCount });
+    setBulkResult({
+      addedCount: summary.addedCount,
+      updatedCount: summary.updatedCount,
+      priceChangedCount: summary.priceChangedCount,
+      failedCount,
+      saveFailed: !summary.success
+    });
     setBulkProgress(null);
     setIsBulkSyncing(false);
   };
@@ -164,10 +171,10 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
     setIsLoadingVariations(false);
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     if (!selectedProduct || variations.length === 0) return;
     setIsImporting(true);
-    const result = onImport(supplierId, [{ productId: selectedProduct.id, productName: selectedProduct.name, region: selectedRegion || "", variations }]);
+    const result = await onImport(supplierId, [{ productId: selectedProduct.id, productName: selectedProduct.name, region: selectedRegion || "", variations }]);
     setImportResult(result);
     setIsImporting(false);
   };
@@ -245,14 +252,23 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
             )}
 
             {bulkResult && (
-              <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
-                <Check className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>
-                  Готово! Додано: {bulkResult.addedCount}, оновлено: {bulkResult.updatedCount}
-                  {bulkResult.priceChangedCount > 0 && `, зміна ціни: ${bulkResult.priceChangedCount}`}
-                  {bulkResult.failedCount > 0 && `. Не вдалось обробити: ${bulkResult.failedCount}`}.
-                </span>
-              </div>
+              bulkResult.saveFailed ? (
+                <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Товари завантажились з LetsKeys, але **не збереглися на сервері** — інші користувачі їх не побачать, і при перезавантаженні сторінки вони зникнуть і у вас. Перевірте з'єднання і повторіть синхронізацію.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
+                  <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Готово, збережено на сервері! Додано: {bulkResult.addedCount}, оновлено: {bulkResult.updatedCount}
+                    {bulkResult.priceChangedCount > 0 && `, зміна ціни: ${bulkResult.priceChangedCount}`}
+                    {bulkResult.failedCount > 0 && `. Не вдалось обробити: ${bulkResult.failedCount}`}.
+                  </span>
+                </div>
+              )
             )}
           </div>
 
@@ -371,13 +387,22 @@ export default function LetsKeysSyncModal({ supplierId, onClose, onImport }: Let
                           </div>
 
                           {importResult ? (
-                            <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
-                              <Check className="w-4 h-4 shrink-0 mt-0.5" />
-                              <span>
-                                Готово! Додано: {importResult.addedCount}, оновлено: {importResult.updatedCount}
-                                {importResult.priceChangedCount > 0 && `, зміна ціни: ${importResult.priceChangedCount}`}.
-                              </span>
-                            </div>
+                            importResult.success ? (
+                              <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2">
+                                <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                                <span>
+                                  Готово, збережено на сервері! Додано: {importResult.addedCount}, оновлено: {importResult.updatedCount}
+                                  {importResult.priceChangedCount > 0 && `, зміна ціни: ${importResult.priceChangedCount}`}.
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-start gap-2">
+                                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                <span>
+                                  Дані порахувались локально, але **не збереглися на сервері** — інші користувачі їх не побачать. Перевірте з'єднання і спробуйте ще раз.
+                                </span>
+                              </div>
+                            )
                           ) : (
                             <button
                               onClick={handleImport}

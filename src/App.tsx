@@ -503,7 +503,7 @@ export default function App() {
   };
 
   // Universal State Update & Disk Save (server first, local cache as backup)
-  const saveStateToDisk = async (updatedDb: DatabaseState) => {
+  const saveStateToDisk = async (updatedDb: DatabaseState): Promise<boolean> => {
     setDb(updatedDb);
 
     if (isOfflineMode) {
@@ -513,7 +513,7 @@ export default function App() {
         type: "error",
         message: "Офлайн-режим: зміну збережено лише локально. Підключіться до сервера, щоб синхронізувати."
       });
-      return;
+      return false;
     }
 
     try {
@@ -522,14 +522,20 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedDb)
       });
-      if (!res.ok) throw new Error("Помилка збереження змін на диск.");
+      if (!res.ok) {
+        let serverMessage = "";
+        try { serverMessage = (await res.json())?.message || ""; } catch { /* ignore */ }
+        throw new Error(serverMessage || "Помилка збереження змін на диск.");
+      }
       writeLocalCache(updatedDb);
-    } catch (error) {
+      return true;
+    } catch (error: any) {
       console.error("Server persist failed:", error);
       setBackupFeedback({
         type: "error",
-        message: "Не вдалося зберегти зміни на сервері. Перевірте з'єднання."
+        message: error?.message || "Не вдалося зберегти зміни на сервері. Перевірте з'єднання."
       });
+      return false;
     }
   };
 
@@ -1053,12 +1059,12 @@ export default function App() {
   // must NOT be called once per (product, region) job during a bulk sync —
   // doing that previously fired one full-database save per job (hundreds of
   // network round-trips, and a real risk of lost updates from stale reads).
-  const handleImportLetsKeysVariations = (
+  const handleImportLetsKeysVariations = async (
     supplierId: string,
     jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]
-  ): { addedCount: number; updatedCount: number; priceChangedCount: number } => {
+  ): Promise<{ addedCount: number; updatedCount: number; priceChangedCount: number; success: boolean }> => {
     const supplier = db.suppliers.find(s => s.id === supplierId);
-    if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0 };
+    if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0, success: false };
 
     let addedCount = 0;
     let updatedCount = 0;
@@ -1153,7 +1159,7 @@ export default function App() {
 
     const updatedSuppliers = db.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
     const updated = { ...db, suppliers: updatedSuppliers };
-    saveStateToDisk(withLog(
+    const success = await saveStateToDisk(withLog(
       updated,
       "Синхронізував товари з LetsKeys",
       "product",
@@ -1161,7 +1167,7 @@ export default function App() {
       `Додано: ${addedCount}, оновлено: ${updatedCount}, зміна ціни: ${priceChangedCount}`
     ));
 
-    return { addedCount, updatedCount, priceChangedCount };
+    return { addedCount, updatedCount, priceChangedCount, success };
   };
 
   const handleToggleProductAdded = (supId: string, prodId: string) => {

@@ -480,7 +480,7 @@ function findSuspiciousWipes(data: any): string[] {
     }, 0);
     // Only flag a *drop to (near) zero*, not any decrease — deleting a few
     // products one at a time is completely normal and shouldn't be blocked.
-    if (currentProductsTotal >= 5 && incomingProductsTotal === 0) {
+    if (currentProductsTotal > 0 && incomingProductsTotal === 0) {
       suspicious.push("suppliers.products");
     }
   }
