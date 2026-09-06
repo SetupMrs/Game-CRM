@@ -1093,9 +1093,9 @@ export default function SupplierManager({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-[#111112] p-4 sm:p-5 rounded-xl border border-white/5 shadow-xs">
         <div className="flex items-center gap-2.5">
           <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20">
-            <Truck className="w-5 h-5" />
+            <Package className="w-5 h-5" />
           </div>
-          <h3 className="font-bold text-white text-lg">Постачальники</h3>
+          <h3 className="font-bold text-white text-lg">Товари</h3>
         </div>
         <button
           onClick={() => setIsAddSupplierOpen(true)}
@@ -1110,7 +1110,7 @@ export default function SupplierManager({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {/* Total */}
         <div className="bg-[#111112] p-4 rounded-xl border border-white/5 flex flex-col justify-between h-24">
-          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Усього постачальників</p>
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Постачальників (джерел)</p>
           <div className="flex items-baseline justify-between mt-1">
             <h2 className="text-2xl font-bold text-white font-mono">{stats.total}</h2>
             <span className="text-[10px] text-emerald-400 font-semibold">База SRM</span>

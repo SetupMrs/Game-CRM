@@ -9,6 +9,7 @@ import {
   AlertCircle,
   Wallet,
   Truck,
+  Package,
   Laptop,
   CheckCircle,
   LogOut,
@@ -1610,8 +1611,8 @@ export default function App() {
                 : "text-gray-400 hover:text-white hover:bg-white/5"
             }`}
           >
-            <Truck className="w-4 h-4" />
-            Постачальники
+            <Package className="w-4 h-4" />
+            Товари
           </button>
         </div>
 
