@@ -597,9 +597,16 @@ app.get("/api/suppliers/letskeys/variations", requireAuth, async (req, res) => {
   if (!productId || !region) {
     return res.status(400).json({ status: "error", message: "Потрібні productId і region." });
   }
-  // Basic sanity check — these go straight into a URL path.
-  if (!/^[a-zA-Z0-9_-]+$/.test(productId) || !/^[a-zA-Z0-9_-]+$/.test(region)) {
-    return res.status(400).json({ status: "error", message: "Невірний формат productId або region." });
+  // productId is always numeric from LetsKeys. region, however, legitimately
+  // contains characters like "/" (e.g. "MY/SG"), parentheses and spaces
+  // (e.g. "GLOBAL(NO RU)") — encodeURIComponent() below already makes any
+  // value safe to embed in the URL, so we only sanity-check length here
+  // instead of whitelisting characters (which was rejecting real regions).
+  if (!/^[0-9]+$/.test(productId)) {
+    return res.status(400).json({ status: "error", message: "productId має бути числом." });
+  }
+  if (region.length > 100) {
+    return res.status(400).json({ status: "error", message: "Занадто довге значення region." });
   }
 
   try {
