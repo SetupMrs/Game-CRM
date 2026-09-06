@@ -1465,14 +1465,12 @@ export default function App() {
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
 
-            {/* Logged-in account (username + role), and user management for admins */}
+            {/* Logged-in account (username + role); click opens user management for anyone logged in */}
             {appUser && (
               <button
-                onClick={() => appUser.role === "admin" && setIsUsersManagerOpen(true)}
-                className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/5 text-xs ${
-                  appUser.role === "admin" ? "bg-[#1A1A1C] hover:bg-white/5 cursor-pointer" : "bg-[#1A1A1C] cursor-default"
-                }`}
-                title={appUser.role === "admin" ? "Керування користувачами" : undefined}
+                onClick={() => setIsUsersManagerOpen(true)}
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/5 text-xs bg-[#1A1A1C] hover:bg-white/5 cursor-pointer"
+                title="Керування користувачами"
               >
                 <ShieldCheck className={`w-3.5 h-3.5 ${appUser.role === "admin" ? "text-emerald-400" : "text-blue-400"}`} />
                 <span className="text-gray-200">{appUser.username}</span>
@@ -1492,8 +1490,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* User management modal (admin only) */}
-      {isUsersManagerOpen && appUser?.role === "admin" && (
+      {/* User management modal (any logged-in account, admin or support) */}
+      {isUsersManagerOpen && appUser && (
         <UsersManager currentUserId={appUser.id} onClose={() => setIsUsersManagerOpen(false)} />
       )}
 

@@ -219,7 +219,7 @@ export default function UsersManager({ currentUserId, onClose }: UsersManagerPro
                   </button>
                 </div>
                 <p className="text-[10px] text-gray-500 mt-1.5">
-                  Адмін бачить усе і керує користувачами. Саппорт має повний доступ до CRM, але не може керувати користувачами.
+                  Обидві ролі мають повний доступ до CRM, включно з керуванням користувачами — «Саппорт» лише позначає роль в команді, різниці в правах немає.
                 </p>
               </div>
 

@@ -244,21 +244,22 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 // ---------------------------------------------------------------------------
-// User management (admin only), plus a lightweight endpoint any logged-in
-// user can call to populate "assign this to..." pickers (task assignee,
-// dashboard workload, calendar) without exposing full account management.
+// User management — open to any logged-in account (admin or support), both
+// roles have identical permissions here. "role" is kept purely as a label;
+// requireAdmin (defined above) is no longer used on these routes but is left
+// in place in case a genuinely admin-only feature needs it later.
 // ---------------------------------------------------------------------------
 app.get("/api/users/basic", requireAuth, (req, res) => {
   const rows = sqlite.prepare("SELECT id, username FROM users ORDER BY username ASC").all();
   res.json({ status: "success", users: rows });
 });
 
-app.get("/api/users", requireAuth, requireAdmin, (req, res) => {
+app.get("/api/users", requireAuth, (req, res) => {
   const rows = sqlite.prepare("SELECT id, username, role, created_at as createdAt FROM users ORDER BY created_at ASC").all();
   res.json({ status: "success", users: rows });
 });
 
-app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
+app.post("/api/users", requireAuth, (req, res) => {
   const { username, password, role } = req.body || {};
 
   if (typeof username !== "string" || !USERNAME_RE.test(username.trim())) {
@@ -286,7 +287,7 @@ app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-app.post("/api/users/:id/reset-password", requireAuth, requireAdmin, (req, res) => {
+app.post("/api/users/:id/reset-password", requireAuth, (req, res) => {
   const { password } = req.body || {};
   if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
     return res.status(400).json({ status: "error", message: `Пароль має містити щонайменше ${MIN_PASSWORD_LENGTH} символів.` });
@@ -304,7 +305,7 @@ app.post("/api/users/:id/reset-password", requireAuth, requireAdmin, (req, res) 
   res.json({ status: "success" });
 });
 
-app.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
+app.delete("/api/users/:id", requireAuth, (req, res) => {
   const target = sqlite.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id) as DbUser | undefined;
   if (!target) {
     return res.status(404).json({ status: "error", message: "Користувача не знайдено." });
