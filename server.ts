@@ -448,6 +448,11 @@ function createBackupSnapshot() {
 // time and still sends the rest of the array. Block these instead of
 // silently destroying data; the one legitimate case (deleting your very
 // last remaining item in a collection) can be forced with allowEmptyWipe.
+//
+// This also checks *nested* data inside suppliers (their products[] arrays)
+// — a supplier row can still exist (so the top-level row count looks fine)
+// while its products silently disappear if a stale client overwrites that
+// one row's JSON blob with an old, product-less snapshot.
 function findSuspiciousWipes(data: any): string[] {
   const suspicious: string[] = [];
   for (const key of DB_ARRAY_KEYS) {
@@ -458,6 +463,28 @@ function findSuspiciousWipes(data: any): string[] {
       suspicious.push(key);
     }
   }
+
+  // Nested check: total products across all suppliers shouldn't collapse
+  // to (near) zero if there were plenty before.
+  if (Array.isArray(data.suppliers)) {
+    const currentRows = sqlite.prepare("SELECT data FROM suppliers").all() as { data: string }[];
+    let currentProductsTotal = 0;
+    for (const row of currentRows) {
+      try {
+        const supplier = JSON.parse(row.data);
+        currentProductsTotal += Array.isArray(supplier.products) ? supplier.products.length : 0;
+      } catch { /* ignore malformed row */ }
+    }
+    const incomingProductsTotal = data.suppliers.reduce((sum: number, s: any) => {
+      return sum + (Array.isArray(s?.products) ? s.products.length : 0);
+    }, 0);
+    // Only flag a *drop to (near) zero*, not any decrease — deleting a few
+    // products one at a time is completely normal and shouldn't be blocked.
+    if (currentProductsTotal >= 5 && incomingProductsTotal === 0) {
+      suspicious.push("suppliers.products");
+    }
+  }
+
   return suspicious;
 }
 
