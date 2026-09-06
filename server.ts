@@ -414,13 +414,67 @@ const writeDbTxn = sqlite.transaction((data: any) => {
   sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('currencyRates', ?)").run(JSON.stringify(currencyRates));
 });
 
-function writeDb(data: any): boolean {
+// --- Safety net #1: automatic rotating backups ------------------------------
+// Every time we're about to overwrite the database, we first copy the
+// current file to data/backups/. Cheap insurance against any future bug
+// (client or server) that could otherwise wipe data silently.
+const BACKUPS_DIR = path.join(DB_DIR, "backups");
+const MAX_BACKUPS = 30;
+
+function createBackupSnapshot() {
   try {
+    if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const dest = path.join(BACKUPS_DIR, `game_crm-${stamp}.sqlite`);
+    fs.copyFileSync(DB_PATH, dest);
+
+    const files = fs.readdirSync(BACKUPS_DIR)
+      .filter(f => f.startsWith("game_crm-") && f.endsWith(".sqlite"))
+      .sort(); // ISO timestamps in the filename sort chronologically
+    while (files.length > MAX_BACKUPS) {
+      const oldest = files.shift();
+      if (oldest) fs.unlinkSync(path.join(BACKUPS_DIR, oldest));
+    }
+  } catch (error) {
+    console.error("Failed to create backup snapshot (continuing anyway):", error);
+  }
+}
+
+// --- Safety net #2: refuse writes that would silently wipe a collection ----
+// If a collection currently has data but the incoming request has it empty,
+// that is almost certainly a bug (a stale/corrupted client state) rather
+// than a deliberate action — every real delete flow removes one item at a
+// time and still sends the rest of the array. Block these instead of
+// silently destroying data; the one legitimate case (deleting your very
+// last remaining item in a collection) can be forced with allowEmptyWipe.
+function findSuspiciousWipes(data: any): string[] {
+  const suspicious: string[] = [];
+  for (const key of DB_ARRAY_KEYS) {
+    const table = TABLE_BY_KEY[key];
+    const currentCount = (sqlite.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number }).c;
+    const incoming = Array.isArray(data[key]) ? data[key] : [];
+    if (currentCount > 0 && incoming.length === 0) {
+      suspicious.push(key);
+    }
+  }
+  return suspicious;
+}
+
+function writeDb(data: any, allowEmptyWipe = false): { success: boolean; blockedCollections?: string[] } {
+  try {
+    if (!allowEmptyWipe) {
+      const suspicious = findSuspiciousWipes(data);
+      if (suspicious.length > 0) {
+        console.warn("Blocked a save that would have wiped non-empty collections:", suspicious.join(", "));
+        return { success: false, blockedCollections: suspicious };
+      }
+    }
+    createBackupSnapshot();
     writeDbTxn(data);
-    return true;
+    return { success: true };
   } catch (error) {
     console.error("Error writing to SQLite database", error);
-    return false;
+    return { success: false };
   }
 }
 
@@ -553,9 +607,16 @@ app.post("/api/db", requireAuth, (req, res) => {
   if (!isValidDbShape(req.body)) {
     return res.status(400).json({ status: "error", message: "Невірний формат даних бази." });
   }
-  const success = writeDb(req.body);
-  if (success) {
+  const allowEmptyWipe = req.query.force === "true";
+  const result = writeDb(req.body, allowEmptyWipe);
+  if (result.success) {
     res.json({ status: "success", message: "Database updated" });
+  } else if (result.blockedCollections) {
+    res.status(409).json({
+      status: "error",
+      message: `Запис заблоковано: спроба видалити всі записи в: ${result.blockedCollections.join(", ")}. Якщо це справді навмисно — повторіть запит з ?force=true.`,
+      blockedCollections: result.blockedCollections
+    });
   } else {
     res.status(500).json({ status: "error", message: "Failed to write database file" });
   }
