@@ -2072,7 +2072,13 @@ export default function SupplierManager({
                       <div className="divide-y divide-white/[0.03] max-h-96 overflow-y-auto">
                         {filtered.map((item, idx) => {
                           const displayTitle = item.title || currentCategory.title;
-                          const displayCurrency = item.currency || currentCategory.currency || "USD";
+                          // These are two different things that happen to share a
+                          // field name elsewhere in the app: "currency" on the
+                          // product doubles as a region tag (e.g. "Global",
+                          // "MY/SG"), while price needs a real currency code. Never
+                          // fall back to the region for the price display.
+                          const displayRegion = currentCategory.currency || "GLOBAL";
+                          const priceCurrency = item.currency || "USD";
                           const isItemAdded = item.isAdded;
                           
                           return (
@@ -2087,19 +2093,19 @@ export default function SupplierManager({
                                     <span className="text-white font-medium truncate max-w-[240px] sm:max-w-xs" title={displayTitle}>
                                       {displayTitle}
                                     </span>
-                                    <span className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm shrink-0">
-                                      {displayCurrency}
+                                    <span className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm shrink-0" title="Регіон">
+                                      {displayRegion}
                                     </span>
                                     {typeof item.price === "number" && (
                                       <span
                                         className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-sm shrink-0"
                                         title={
                                           item.priceHistory && item.priceHistory.length > 0
-                                            ? `Історія цін:\n${item.priceHistory.map(h => `${h.price} ${h.currency || displayCurrency} — ${formatDate(h.changedAt)}`).join("\n")}`
+                                            ? `Історія цін:\n${item.priceHistory.map(h => `${h.price} ${h.currency || priceCurrency} — ${formatDate(h.changedAt)}`).join("\n")}`
                                             : undefined
                                         }
                                       >
-                                        {item.price} {displayCurrency}
+                                        {item.price} {priceCurrency}
                                         {item.priceHistory && item.priceHistory.length > 0 && (
                                           <span className="text-emerald-500/70"> ({item.priceHistory.length})</span>
                                         )}
