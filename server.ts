@@ -657,6 +657,177 @@ app.post("/api/db", requireAuth, (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// LetsKeys automatic price sync (background job)
+// ---------------------------------------------------------------------------
+// Re-fetches variations for every already-synced product (matched by its
+// stored externalProductId/externalRegion) and merges price/stock changes
+// straight into SQLite — the same merge rules the manual sync button uses
+// (match by externalVariationId, record price history when price changes).
+// This runs entirely server-side on a timer, no browser tab needs to be open.
+const LETSKEYS_AUTO_SYNC_HOURS = Number(process.env.LETSKEYS_AUTO_SYNC_HOURS) || 0;
+
+async function fetchLetsKeysVariationsRaw(productId: string, region: string, apiKey: string): Promise<any[] | null> {
+  try {
+    const response = await fetch(
+      `${LETSKEYS_BASE_URL}/catalog/product/${encodeURIComponent(productId)}/region/${encodeURIComponent(region)}`,
+      { headers: { "X-API-Key": apiKey }, signal: AbortSignal.timeout(15000) }
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    return Array.isArray(data?.variations) ? data.variations : [];
+  } catch {
+    return null;
+  }
+}
+
+let isAutoSyncRunning = false;
+
+async function runLetsKeysAutoSync() {
+  if (isAutoSyncRunning) {
+    console.log("[AutoSync] Попередній запуск ще триває, пропускаю.");
+    return;
+  }
+  const apiKey = getLetsKeysApiKey();
+  if (!apiKey) {
+    console.log("[AutoSync] LETSKEYS_API_KEY не налаштовано — автосинхронізацію пропущено.");
+    return;
+  }
+
+  isAutoSyncRunning = true;
+  try {
+    const db = readDb();
+    const linkedSuppliers = (db.suppliers || []).filter((s: any) => s.letsKeysLinked && !s.deletedAt);
+    if (linkedSuppliers.length === 0) {
+      console.log("[AutoSync] Немає постачальників, прив'язаних до LetsKeys — пропущено.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let productsUpdated = 0;
+    let priceChangedCount = 0;
+    let failedCount = 0;
+
+    console.log(`[AutoSync] Початок фонової синхронізації цін LetsKeys (${linkedSuppliers.length} постачальник(ів))...`);
+
+    for (const supplier of linkedSuppliers) {
+      const products = (supplier.products || []).filter((p: any) => !p.deletedAt && p.externalProductId && p.externalRegion);
+
+      for (const product of products) {
+        const variations = await fetchLetsKeysVariationsRaw(product.externalProductId, product.externalRegion, apiKey);
+        // Being polite to LetsKeys' API regardless of success/failure.
+        await new Promise(r => setTimeout(r, 200));
+
+        if (!variations) {
+          failedCount++;
+          continue;
+        }
+
+        const itemByExternalId: Record<string, any> = {};
+        (product.items || []).forEach((item: any) => {
+          if (item.externalVariationId) itemByExternalId[item.externalVariationId] = item;
+        });
+
+        const mergedItems = [...(product.items || [])];
+        let productChanged = false;
+
+        variations.forEach((v: any) => {
+          const extId = String(v.id);
+          const existingItem = itemByExternalId[extId];
+
+          if (existingItem) {
+            const priceChanged = typeof existingItem.price === "number" && existingItem.price !== v.price;
+            const stockChanged = existingItem.externalInStock !== v.in_stock;
+            if (priceChanged || stockChanged) {
+              const idx = mergedItems.findIndex((i: any) => i.id === existingItem.id);
+              const updatedItem: any = { ...existingItem, externalInStock: v.in_stock, lastSyncedAt: now };
+              if (priceChanged) {
+                const historyEntry = {
+                  id: crypto.randomUUID(),
+                  price: existingItem.price,
+                  currency: existingItem.currency,
+                  changedAt: now
+                };
+                updatedItem.price = v.price;
+                updatedItem.priceHistory = [historyEntry, ...(existingItem.priceHistory || [])].slice(0, 50);
+                priceChangedCount++;
+              }
+              mergedItems[idx] = updatedItem;
+              productChanged = true;
+            }
+          } else {
+            mergedItems.push({
+              id: crypto.randomUUID(),
+              code: extId,
+              title: v.name,
+              price: v.price,
+              currency: "USD",
+              status: "Available",
+              createdAt: now,
+              externalVariationId: extId,
+              externalInStock: v.in_stock,
+              lastSyncedAt: now
+            });
+            productChanged = true;
+          }
+        });
+
+        if (productChanged) {
+          product.items = mergedItems;
+          product.lastSyncedAt = now;
+          productsUpdated++;
+        }
+      }
+    }
+
+    if (productsUpdated > 0) {
+      db.activityLog = [
+        {
+          id: crypto.randomUUID(),
+          timestamp: now,
+          actorName: "Автосинхронізація",
+          action: "Оновив ціни з LetsKeys (автоматично)",
+          entityType: "product",
+          entityTitle: `${productsUpdated} товар(ів)`,
+          details: `Зміна ціни: ${priceChangedCount}${failedCount > 0 ? `, помилок: ${failedCount}` : ""}`
+        },
+        ...(db.activityLog || [])
+      ].slice(0, 300);
+
+      const result = writeDb(db, false);
+      if (!result.success) {
+        console.warn("[AutoSync] Запис заблоковано або не вдався:", result.blockedCollections || "невідома причина");
+      } else {
+        console.log(`[AutoSync] Готово. Оновлено товарів: ${productsUpdated}, зміна ціни: ${priceChangedCount}, помилок: ${failedCount}.`);
+      }
+    } else {
+      console.log(`[AutoSync] Готово, змін немає (помилок: ${failedCount}).`);
+    }
+  } catch (error) {
+    console.error("[AutoSync] Несподівана помилка:", error);
+  } finally {
+    isAutoSyncRunning = false;
+  }
+}
+
+// Manual trigger — lets anyone logged in kick off a sync right now instead
+// of waiting for the scheduled interval.
+app.post("/api/suppliers/letskeys/auto-sync/run-now", requireAuth, (req, res) => {
+  runLetsKeysAutoSync().catch(err => console.error("[AutoSync] failed:", err));
+  res.json({ status: "success", message: "Синхронізацію запущено у фоні." });
+});
+
+if (LETSKEYS_AUTO_SYNC_HOURS > 0) {
+  const intervalMs = LETSKEYS_AUTO_SYNC_HOURS * 60 * 60 * 1000;
+  // First run shortly after startup (not instantly, to let everything settle),
+  // then repeat on the configured interval.
+  setTimeout(() => { runLetsKeysAutoSync().catch(err => console.error("[AutoSync] failed:", err)); }, 2 * 60 * 1000);
+  setInterval(() => { runLetsKeysAutoSync().catch(err => console.error("[AutoSync] failed:", err)); }, intervalMs);
+  console.log(`[AutoSync] Автоматична синхронізація цін LetsKeys увімкнена — кожні ${LETSKEYS_AUTO_SYNC_HOURS} год.`);
+} else {
+  console.log("[AutoSync] Автоматична синхронізація вимкнена (LETSKEYS_AUTO_SYNC_HOURS не задано або 0).");
+}
+
 // Configure Vite middleware or Static files serving
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
