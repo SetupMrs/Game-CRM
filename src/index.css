@@ -31,3 +31,17 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.15);
 }
+
+/* Native <select> dropdowns: the collapsed control inherits our dark theme
+   fine via Tailwind classes, but the browser draws the OPEN option list
+   itself using OS defaults — which stayed white-on-white with our
+   white-styled text. Force a dark, readable dropdown everywhere in the app
+   instead of patching every individual <select>. */
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background-color: #161618;
+  color: #F4F4F5;
+}
