@@ -543,11 +543,9 @@ export default function TaskManager({
     };
 
     const updatedSubtasks = [...(selectedTaskForEdit.subTasks || []), newSub];
-    
-    setSelectedTaskForEdit({
-      ...selectedTaskForEdit,
-      subTasks: updatedSubtasks
-    });
+    const updated = { ...selectedTaskForEdit, subTasks: updatedSubtasks };
+    setSelectedTaskForEdit(updated);
+    onUpdateTask(updated);
     setEditSubTaskInput("");
   };
 
@@ -558,19 +556,17 @@ export default function TaskManager({
       st.id === subId ? { ...st, completed: !st.completed } : st
     );
 
-    setSelectedTaskForEdit({
-      ...selectedTaskForEdit,
-      subTasks: updatedSubtasks
-    });
+    const updated = { ...selectedTaskForEdit, subTasks: updatedSubtasks };
+    setSelectedTaskForEdit(updated);
+    onUpdateTask(updated);
   };
 
   const removeSubTaskInEdit = (subId: string) => {
     if (!selectedTaskForEdit || !selectedTaskForEdit.subTasks) return;
     
-    setSelectedTaskForEdit({
-      ...selectedTaskForEdit,
-      subTasks: selectedTaskForEdit.subTasks.filter(st => st.id !== subId)
-    });
+    const updated = { ...selectedTaskForEdit, subTasks: selectedTaskForEdit.subTasks.filter(st => st.id !== subId) };
+    setSelectedTaskForEdit(updated);
+    onUpdateTask(updated);
   };
 
   // Inline Subtask Add inside the Card
@@ -1941,35 +1937,11 @@ function TaskCard({
   onToggleSelect
 }: TaskCardProps) {
   const isOverdue = task.status !== "Completed" && task.status !== "Cancelled" && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
-  const [isChecklistExpanded, setIsChecklistExpanded] = useState(false);
-  const [isStatusPickerOpen, setIsStatusPickerOpen] = useState(false);
-  const [inlineSubInput, setInlineSubInput] = useState("");
-
-  const statusConfig = TASK_STATUS_CONFIGS[task.status] || TASK_STATUS_CONFIGS["Pending"];
-
-  const subtasksCount = task.subTasks?.length || 0;
-  const completedCount = task.subTasks?.filter(st => st.completed).length || 0;
-  const subtasksPercent = subtasksCount > 0 ? Math.round((completedCount / subtasksCount) * 100) : 0;
-
-  const imagesCount = task.images?.length || 0;
-  const voiceNotesCount = task.voiceNotes?.length || 0;
-  const tagsCount = task.tags?.length || 0;
-  const chatMessagesCount = task.chatMessages?.length || 0;
-
-  const handleQuickAddSub = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inlineSubInput.trim()) return;
-    onInlineAddSubtask(task.id, inlineSubInput.trim());
-    setInlineSubInput("");
-  };
-
-  // Next workflow action helper
-  const nextAction = getNextStatusAction(task.status);
 
   return (
     <div
       onClick={() => { if (!isSelectionMode) onOpenEdit(task); }}
-      className={`bg-[#161618] p-3.5 rounded-xl border space-y-2.5 group transition-all hover:border-emerald-500/40 relative ${
+      className={`bg-[#161618] p-3.5 rounded-xl border space-y-2 group transition-all hover:border-emerald-500/40 relative ${
         isSelectionMode ? "cursor-default" : "cursor-pointer"
       } ${
         isSelected ? "border-emerald-500/50 ring-1 ring-emerald-500/30" : "border-white/5"
@@ -1991,333 +1963,55 @@ function TaskCard({
           <CheckSquareIcon className="w-3.5 h-3.5" />
         </button>
       )}
-      {/* Top Status & Role Tags Row */}
-      <div className="flex flex-wrap items-center justify-between gap-1.5" onClick={(e) => e.stopPropagation()}>
-        {/* Status Dropdown Trigger */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setIsStatusPickerOpen(!isStatusPickerOpen)}
-            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold border transition-all cursor-pointer ${statusConfig.badgeClass}`}
-            title="Змінити статус"
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${statusConfig.dotClass}`}></span>
-            <span>{statusConfig.label}</span>
-            <ChevronDown className="w-2.5 h-2.5 opacity-70" />
-          </button>
 
-          {/* Quick Status Dropdown Menu */}
-          {isStatusPickerOpen && (
+      {/* Delete — tucked away, only shows on hover so it doesn't clutter the minimal card */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(task.id); }}
+        className="absolute top-2 right-2 p-1 text-gray-600 hover:text-red-400 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+        title="Видалити завдання"
+      >
+        <Trash2 className="w-3 h-3" />
+      </button>
+
+      {/* Title */}
+      <p className={`text-xs font-semibold pr-5 leading-snug ${
+        task.status === "Completed" ? "line-through text-gray-500" : "text-white"
+      }`}>
+        {task.title}
+      </p>
+
+      {/* Assignee, priority, deadline — the only other info this card shows */}
+      <div className="flex items-center justify-between gap-2 text-[10px]">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {assignee ? (
             <>
-              <div 
-                className="fixed inset-0 z-20" 
-                onClick={() => setIsStatusPickerOpen(false)}
-              />
-              <div className="absolute left-0 top-full mt-1 z-30 bg-[#1A1A1D] border border-white/10 rounded-lg p-1 shadow-xl min-w-[130px] space-y-0.5 animate-scaleIn">
-                {TASK_STATUS_LIST.map((st) => {
-                  const cfg = TASK_STATUS_CONFIGS[st];
-                  const isCurrent = task.status === st;
-                  return (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => {
-                        onSetStatus(task.id, st);
-                        setIsStatusPickerOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-2 px-2 py-1 rounded text-[11px] font-medium text-left transition-colors cursor-pointer ${
-                        isCurrent 
-                          ? `${cfg.badgeClass} font-bold`
-                          : "text-gray-300 hover:bg-white/5 hover:text-white"
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${cfg.dotClass}`}></span>
-                      <span>{cfg.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <span
+                className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0"
+                style={{ backgroundColor: getAvatarColor(assignee.id) }}
+                title={`Відповідальний: ${assignee.username}`}
+              >
+                {assignee.username.trim().charAt(0).toUpperCase()}
+              </span>
+              <span className="text-gray-400 truncate">{assignee.username}</span>
             </>
+          ) : (
+            <span className="text-gray-600 italic">Не призначено</span>
           )}
         </div>
 
-        {/* Tags */}
-        {tagsCount > 0 && (
-          <div className="flex flex-wrap items-center gap-1">
-            {task.tags?.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectTagFilter?.(tag);
-                }}
-                className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${getTagStyle(tag)} transition-all hover:scale-105 cursor-pointer flex items-center gap-0.5`}
-                title={`Фільтрувати за тегом: ${tag}`}
-              >
-                <Tag className="w-2 h-2 opacity-70" />
-                <span>{tag}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Linked products / issue indicator */}
-        {(task.linkedProducts?.length || 0) > 0 && (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onOpenEdit(task); }}
-            className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-pointer transition-all hover:scale-105 ${
-              task.linkedProducts!.some(l => l.issueNote)
-                ? "text-red-400 bg-red-500/10 border-red-500/20"
-                : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-            }`}
-            title={task.linkedProducts!.map(l => `${l.productTitle}${l.itemCode ? ` (${l.itemCode})` : ""}${l.issueNote ? ` — ${l.issueNote}` : ""}`).join("\n")}
-          >
-            {task.linkedProducts!.some(l => l.issueNote) ? (
-              <AlertTriangle className="w-2.5 h-2.5" />
-            ) : (
-              <Package className="w-2.5 h-2.5" />
-            )}
-            <span>{task.linkedProducts!.length}</span>
-          </button>
-        )}
-
-        {/* Assignee avatar */}
-        {assignee && (
-          <span
-            className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-            style={{ backgroundColor: getAvatarColor(assignee.id) }}
-            title={`Відповідальний: ${assignee.username}`}
-          >
-            {assignee.username.trim().charAt(0).toUpperCase()}
-          </span>
-        )}
-      </div>
-
-      {/* Header section (Title, Checkbox, Actions) */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-start gap-2 min-w-0">
-          <input
-            type="checkbox"
-            checked={task.status === "Completed"}
-            onChange={() => onToggleStatus(task.id)}
-            onClick={(e) => e.stopPropagation()}
-            className="mt-0.5 h-3.5 w-3.5 rounded-sm text-emerald-500 focus:ring-emerald-500 cursor-pointer bg-[#0A0A0B] border-white/10"
-            title={task.status === "Completed" ? "Позначити як невиконане" : "Позначити як виконане"}
-          />
-          <div className="min-w-0">
-            <span className={`text-xs font-semibold text-white leading-tight block ${
-              task.status === "Completed" ? "line-through text-gray-500" : ""
-            }`}>
-              {task.title}
-            </span>
-            {task.description && (
-              <p className="text-[10px] text-gray-500 line-clamp-2 mt-0.5">
-                {task.description}
-              </p>
-            )}
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={() => onOpenChat(task)}
-            className="p-1 text-gray-400 hover:text-emerald-400 rounded hover:bg-white/5 cursor-pointer relative"
-            title="Чат обговорення"
-          >
-            <MessageSquare className="w-3 h-3" />
-            {chatMessagesCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-            )}
-          </button>
-          <button
-            onClick={() => onOpenEdit(task)}
-            className="p-1 text-gray-500 hover:text-emerald-400 rounded hover:bg-white/5 cursor-pointer"
-            title="Деталі та редагування"
-          >
-            <Edit2 className="w-3 h-3" />
-          </button>
-          <button
-            onClick={() => onDelete(task.id)}
-            className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-white/5 cursor-pointer"
-            title="Видалити завдання"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Progress Bar of Subtasks */}
-      {subtasksCount > 0 && (
-        <div className="space-y-1">
-          <div className="flex justify-between items-center text-[9px] font-bold text-gray-500">
-            <span className="flex items-center gap-1">
-              <ListTodo className="w-3 h-3 text-emerald-400" />
-              <span>{completedCount}/{subtasksCount} пунктів</span>
-            </span>
-            <span>{subtasksPercent}%</span>
-          </div>
-          <div className="w-full bg-white/[0.03] h-1.5 rounded-full overflow-hidden border border-white/5">
-            <div 
-              className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-              style={{ width: `${subtasksPercent}%` }}
-            ></div>
-          </div>
-        </div>
-      )}
-
-      {/* COMPACT VOICE & IMAGES PREVIEW ON CARD */}
-      {(voiceNotesCount > 0 || imagesCount > 0) && (
-        <div className="space-y-1.5 pt-0.5 border-t border-white/5" onClick={(e) => e.stopPropagation()}>
-          {/* Voice Notes */}
-          {voiceNotesCount > 0 && (
-            <div className="space-y-1">
-              {task.voiceNotes?.map((vn) => (
-                <VoicePlayer key={vn.id} voiceNote={vn} compact={true} />
-              ))}
-            </div>
-          )}
-
-          {/* Thumbnail Images */}
-          {imagesCount > 0 && (
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-              {task.images?.map((img, idx) => (
-                <button
-                  key={img.id || idx}
-                  type="button"
-                  onClick={() => onOpenLightbox(task.images || [], idx)}
-                  className="relative w-10 h-10 rounded-md overflow-hidden border border-white/10 bg-black/40 hover:border-emerald-500 transition-all hover:scale-105 shrink-0 group/img cursor-pointer shadow-xs"
-                  title={`${img.name || "Скріншот"} (Натисніть для збільшення)`}
-                >
-                  <img
-                    src={img.url}
-                    alt={img.name || "Attachment"}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center">
-                    <Maximize2 className="w-2.5 h-2.5 text-white" />
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Expandable Checklist Section */}
-      <div className="border-t border-white/5 pt-1.5" onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={() => setIsChecklistExpanded(!isChecklistExpanded)}
-          className="w-full flex justify-between items-center text-[10px] text-gray-500 hover:text-white transition-colors cursor-pointer"
-        >
-          <span className="font-semibold uppercase tracking-wider">
-            {isChecklistExpanded ? "Приховати чек-лист" : `Чек-лист (${completedCount}/${subtasksCount})`}
-          </span>
-          <span className="p-0.5 bg-white/5 rounded">
-            {isChecklistExpanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
-          </span>
-        </button>
-
-        {isChecklistExpanded && (
-          <div className="mt-2 space-y-2">
-            {subtasksCount > 0 ? (
-              <ul className="space-y-1">
-                {task.subTasks?.map(st => (
-                  <li key={st.id} className="flex items-center gap-2 bg-[#111112] border border-white/5 rounded px-2 py-1 text-[11px]">
-                    <input
-                      type="checkbox"
-                      checked={st.completed}
-                      onChange={() => onInlineToggleSubtask(task.id, st.id)}
-                      className="h-3 w-3 text-emerald-500 rounded-sm cursor-pointer"
-                    />
-                    <span className={`truncate leading-tight ${st.completed ? "line-through text-gray-600" : "text-gray-300"}`}>
-                      {st.title}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-[10px] text-gray-600 italic">Немає підпунктів.</p>
-            )}
-
-            <form onSubmit={handleQuickAddSub} className="flex gap-1.5">
-              <input
-                type="text"
-                placeholder="Новий пункт..."
-                value={inlineSubInput}
-                onChange={(e) => setInlineSubInput(e.target.value)}
-                className="flex-1 px-2 py-1 text-[10px] border border-white/10 rounded bg-white/[0.01] text-white"
-              />
-              <button
-                type="submit"
-                className="px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold cursor-pointer"
-              >
-                +
-              </button>
-            </form>
-          </div>
-        )}
-      </div>
-
-      {/* Footer Meta Section */}
-      <div className="space-y-1 pt-1.5 border-t border-white/5">
-        {task.counterparty && (
-          <p className="text-[10px] text-gray-400 flex items-center gap-1">
-            <User className="w-2.5 h-2.5 text-gray-500 shrink-0" />
-            <span className="truncate font-semibold">{task.counterparty}</span>
-          </p>
-        )}
-
-        <div className="flex justify-between items-center text-[10px]">
-          <span className={`flex items-center gap-1 ${isOverdue ? "text-red-400 font-bold" : "text-gray-500 font-mono"}`}>
-            <Calendar className="w-2.5 h-2.5" />
-            {formatDate(task.dueDate)} {isOverdue && "(Протерміновано)"}
-          </span>
-
-          <span className={`px-1.5 py-0.2 rounded font-bold text-[9px] ${
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${
             task.priority === "High" ? "bg-red-500/10 text-red-400 border border-red-500/20" :
             task.priority === "Medium" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" :
             "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
           }`}>
             {task.priority === "High" ? "Терміново" : task.priority === "Medium" ? "Середній" : "Низький"}
           </span>
+          <span className={`flex items-center gap-1 font-mono ${isOverdue ? "text-red-400 font-bold" : "text-gray-500"}`}>
+            <Calendar className="w-2.5 h-2.5" />
+            {formatDate(task.dueDate)}
+          </span>
         </div>
-      </div>
-
-      {/* Discussion Chat Trigger and Quick Next Action Buttons */}
-      <div className="pt-2 flex items-center justify-between border-t border-white/5" onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          onClick={() => onOpenChat(task)}
-          className={`text-[10px] font-medium px-2 py-1 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
-            chatMessagesCount > 0
-              ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 font-bold"
-              : "bg-white/[0.03] border-white/10 text-gray-400 hover:text-white hover:bg-white/10"
-          }`}
-          title="Відкрити чат обговорення справи"
-        >
-          <MessageSquare className="w-3 h-3 text-emerald-400" />
-          <span>Обговорення</span>
-          {chatMessagesCount > 0 && (
-            <span className="px-1.5 py-0.2 bg-emerald-500 text-black text-[9px] font-bold rounded-full">
-              {chatMessagesCount}
-            </span>
-          )}
-        </button>
-
-        {nextAction && (
-          <button
-            type="button"
-            onClick={() => onSetStatus(task.id, nextAction.nextStatus)}
-            className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 px-2 py-1 rounded flex items-center gap-1 transition-colors cursor-pointer"
-            title={`Перевести в статус: ${TASK_STATUS_CONFIGS[nextAction.nextStatus]?.label}`}
-          >
-            <span>{nextAction.label}</span>
-            <ArrowRight className="w-2.5 h-2.5" />
-          </button>
-        )}
       </div>
     </div>
   );
