@@ -1111,8 +1111,14 @@ export default function TaskManager({
 
       {/* CREATE NEW TASK MODAL */}
       {isFormOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden animate-scaleIn">
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={() => setIsFormOpen(false)}
+        >
+          <div
+            className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 bg-[#161618] text-white flex justify-between items-center border-b border-white/5 shrink-0">
               <h4 className="font-bold text-sm flex items-center gap-2">
                 <Plus className="w-4 h-4 text-emerald-400" />
@@ -1382,8 +1388,14 @@ export default function TaskManager({
 
       {/* TEMPLATES MODAL */}
       {isTemplatesModalOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden animate-scaleIn">
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={() => setIsTemplatesModalOpen(false)}
+        >
+          <div
+            className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 bg-[#161618] text-white flex justify-between items-center border-b border-white/5 shrink-0">
               <h4 className="font-bold text-sm flex items-center gap-2">
                 <LayoutTemplate className="w-4 h-4 text-emerald-400" />
@@ -1435,8 +1447,14 @@ export default function TaskManager({
 
       {/* ADVANCED TASK EDIT & DETAILS MODAL */}
       {selectedTaskForEdit && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden animate-scaleIn">
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={handleSaveTaskEdit}
+        >
+          <div
+            className="bg-[#111112] rounded-xl border border-white/10 shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-5 py-3 bg-[#161618] text-white flex justify-between items-center border-b border-white/5 shrink-0">
               {/* Tab Selector in Modal Header */}
               <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10">
@@ -1488,7 +1506,7 @@ export default function TaskManager({
               </div>
 
               <button 
-                onClick={() => setSelectedTaskForEdit(null)} 
+                onClick={handleSaveTaskEdit} 
                 className="text-gray-400 hover:text-white text-lg p-1 hover:bg-white/5 rounded-lg cursor-pointer"
                 title="Закрити"
               >
@@ -1707,7 +1725,7 @@ export default function TaskManager({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSelectedTaskForEdit(null)}
+                    onClick={handleSaveTaskEdit}
                     className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer"
                   >
                     Закрити
@@ -1874,8 +1892,11 @@ export default function TaskManager({
 
       {/* Standalone Task Discussion Chat Modal */}
       {chatTask && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="w-full max-w-2xl animate-scaleIn">
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={() => setChatTask(null)}
+        >
+          <div className="w-full max-w-2xl animate-scaleIn" onClick={(e) => e.stopPropagation()}>
             <TaskDiscussionChat
               task={chatTask}
               onUpdateTask={handleUpdateTaskFromChat}
