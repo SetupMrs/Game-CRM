@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Supplier, ProductCard, PriceHistoryEntry } from "../types";
+import { Supplier, ProductCard, PriceHistoryEntry, CategoryItem } from "../types";
 import { formatDate } from "../utils";
 import { Search, TrendingUp, TrendingDown, X, ChevronRight, ArrowLeft, Zap, Hand } from "lucide-react";
 
@@ -51,6 +51,7 @@ function formatDateTime(iso: string): string {
 export default function PricesManager({ suppliers }: PricesManagerProps) {
   const [search, setSearch] = useState("");
   const [openProductKey, setOpenProductKey] = useState<string | null>(null);
+  const [openGroupKey, setOpenGroupKey] = useState<string | null>(null);
   const [openItemKey, setOpenItemKey] = useState<string | null>(null);
 
   const flatProducts = useMemo<FlatProduct[]>(() => {
@@ -144,6 +145,7 @@ export default function PricesManager({ suppliers }: PricesManagerProps) {
 
   const closeAll = () => {
     setOpenProductKey(null);
+    setOpenGroupKey(null);
     setOpenItemKey(null);
   };
 
@@ -262,9 +264,24 @@ export default function PricesManager({ suppliers }: PricesManagerProps) {
 
             <div className="overflow-y-auto flex-1">
               {openItemKey ? (
-                <ItemHistoryView product={openProduct.product} itemKey={openItemKey} onBack={() => setOpenItemKey(null)} />
+                <ItemHistoryView
+                  product={openProduct.product}
+                  itemKey={openItemKey}
+                  onBack={() => setOpenItemKey(null)}
+                />
+              ) : openGroupKey ? (
+                <GroupSourcesView
+                  product={openProduct.product}
+                  groupKey={openGroupKey}
+                  onSelectItem={key => setOpenItemKey(key)}
+                  onBack={() => setOpenGroupKey(null)}
+                />
               ) : (
-                <NominalsList product={openProduct.product} onSelectItem={key => setOpenItemKey(key)} />
+                <NominalsList
+                  product={openProduct.product}
+                  onSelectItem={key => setOpenItemKey(key)}
+                  onSelectGroup={key => setOpenGroupKey(key)}
+                />
               )}
             </div>
           </div>
@@ -274,9 +291,48 @@ export default function PricesManager({ suppliers }: PricesManagerProps) {
   );
 }
 
+// --- Grouping identical nominals (same name/currency) coming from several
+// underlying LetsKeys suppliers, so they don't look like accidental duplicates.
+
+function nominalGroupKey(title: string, currency?: string): string {
+  return `${title.trim().toLowerCase()}|${(currency || "USD").toLowerCase()}`;
+}
+
+interface NominalGroup {
+  key: string;
+  title: string;
+  currency: string;
+  items: CategoryItem[];
+}
+
+function buildNominalGroups(product: ProductCard): NominalGroup[] {
+  const items = product.items || [];
+  const byKey: Record<string, NominalGroup> = {};
+  const order: string[] = [];
+  items.forEach(item => {
+    const title = item.title || product.title;
+    const currency = item.currency || "USD";
+    const key = nominalGroupKey(title, currency);
+    if (!byKey[key]) {
+      byKey[key] = { key, title, currency, items: [] };
+      order.push(key);
+    }
+    byKey[key].items.push(item);
+  });
+  return order.map(k => byKey[k]);
+}
+
 // --- Nominals list inside the modal -----------------------------------------
 
-function NominalsList({ product, onSelectItem }: { product: ProductCard; onSelectItem: (key: string) => void }) {
+function NominalsList({
+  product,
+  onSelectItem,
+  onSelectGroup
+}: {
+  product: ProductCard;
+  onSelectItem: (key: string) => void;
+  onSelectGroup: (key: string) => void;
+}) {
   const items = product.items || [];
 
   if (items.length === 0) {
@@ -299,24 +355,108 @@ function NominalsList({ product, onSelectItem }: { product: ProductCard; onSelec
     return <p className="text-center text-gray-500 text-sm py-10">У цього товару ще немає ціни.</p>;
   }
 
+  const groups = buildNominalGroups(product);
+
   return (
     <div className="divide-y divide-white/5">
-      {items.map(item => {
-        const trend = priceTrend(item.price, item.priceHistory?.[0], item.currency);
+      {groups.map(group => {
+        if (group.items.length === 1) {
+          const item = group.items[0];
+          const trend = priceTrend(item.price, item.priceHistory?.[0], item.currency);
+          return (
+            <PriceRow
+              key={group.key}
+              title={item.title || product.title}
+              code={item.code}
+              price={item.price}
+              currency={item.currency}
+              trend={trend}
+              prevEntry={item.priceHistory?.[0]}
+              source={Boolean(item.externalVariationId) && product.externalSource === "letskeys" ? "letskeys" : "manual"}
+              onClick={() => onSelectItem(item.id)}
+            />
+          );
+        }
+
+        // Several LetsKeys variations share this exact denomination — show the
+        // cheapest current offer and let the person drill into "who has it".
+        const cheapest = group.items.reduce((min, it) =>
+          typeof it.price === "number" && (typeof min.price !== "number" || it.price < min.price) ? it : min
+        , group.items[0]);
+        const trend = priceTrend(cheapest.price, cheapest.priceHistory?.[0], cheapest.currency);
         return (
           <PriceRow
-            key={item.id}
-            title={item.title || product.title}
-            code={item.code}
-            price={item.price}
-            currency={item.currency}
+            key={group.key}
+            title={group.title}
+            price={cheapest.price}
+            currency={group.currency}
             trend={trend}
-            prevEntry={item.priceHistory?.[0]}
-            source={Boolean(item.externalVariationId) && product.externalSource === "letskeys" ? "letskeys" : "manual"}
-            onClick={() => onSelectItem(item.id)}
+            prevEntry={cheapest.priceHistory?.[0]}
+            source="letskeys"
+            sourceCount={group.items.length}
+            onClick={() => onSelectGroup(group.key)}
           />
         );
       })}
+    </div>
+  );
+}
+
+// --- Pick which of several suppliers behind one nominal to inspect ----------
+
+function GroupSourcesView({
+  product,
+  groupKey,
+  onSelectItem,
+  onBack
+}: {
+  product: ProductCard;
+  groupKey: string;
+  onSelectItem: (key: string) => void;
+  onBack: () => void;
+}) {
+  const groups = useMemo(() => buildNominalGroups(product), [product]);
+  const group = groups.find(g => g.key === groupKey);
+
+  if (!group) {
+    return (
+      <div className="p-4">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer">
+          <ArrowLeft className="w-3.5 h-3.5" /> Назад до номіналів
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer">
+        <ArrowLeft className="w-3.5 h-3.5" /> Назад до номіналів
+      </button>
+      <div>
+        <p className="text-sm font-bold text-white">{group.title}</p>
+        <p className="text-[11px] text-gray-500">
+          Цей номінал доступний одразу від {group.items.length} постачальників LetsKeys — оберіть, чию ціну переглянути.
+        </p>
+      </div>
+      <div className="border border-white/5 rounded-xl overflow-hidden divide-y divide-white/5">
+        {group.items.map(item => {
+          const trend = priceTrend(item.price, item.priceHistory?.[0], item.currency);
+          return (
+            <PriceRow
+              key={item.id}
+              title={item.title || group.title}
+              code={item.code}
+              price={item.price}
+              currency={item.currency}
+              trend={trend}
+              prevEntry={item.priceHistory?.[0]}
+              source={Boolean(item.externalVariationId) && product.externalSource === "letskeys" ? "letskeys" : "manual"}
+              onClick={() => onSelectItem(item.id)}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -330,10 +470,11 @@ interface PriceRowProps {
   trend: Trend;
   prevEntry?: PriceHistoryEntry;
   source: "letskeys" | "manual";
+  sourceCount?: number;
   onClick: () => void;
 }
 
-function PriceRow({ title, code, price, currency, trend, prevEntry, source, onClick }: PriceRowProps) {
+function PriceRow({ title, code, price, currency, trend, prevEntry, source, sourceCount, onClick }: PriceRowProps) {
   const diff = trend !== "none" && prevEntry && typeof price === "number" ? price - prevEntry.price : 0;
   const pct = trend !== "none" && prevEntry && prevEntry.price > 0 ? Math.round((diff / prevEntry.price) * 100) : 0;
 
@@ -356,6 +497,14 @@ function PriceRow({ title, code, price, currency, trend, prevEntry, source, onCl
               Вручну
             </span>
           )}
+          {sourceCount && sourceCount > 1 && (
+            <span
+              className="bg-purple-500/10 text-purple-300 border border-purple-500/20 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-sm shrink-0"
+              title="Скільки різних постачальників LetsKeys продають цей самий номінал"
+            >
+              {sourceCount} постачальники
+            </span>
+          )}
         </div>
         {code && <span className="text-[10px] font-mono text-gray-500">{code}</span>}
       </div>
@@ -376,6 +525,7 @@ function PriceRow({ title, code, price, currency, trend, prevEntry, source, onCl
                 {pct}%)
               </p>
             )}
+            {sourceCount && sourceCount > 1 && trend === "none" && <p className="text-[10px] text-gray-600">найдешевше</p>}
           </>
         ) : (
           <p className="text-xs text-gray-600">—</p>
