@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Bell,
   TrendingUp,
+  LineChart,
   Search
 } from "lucide-react";
 import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
@@ -33,6 +34,7 @@ const Dashboard = lazy(() => import("./components/Dashboard"));
 const TaskManager = lazy(() => import("./components/TaskManager"));
 const FinanceManager = lazy(() => import("./components/FinanceManager"));
 const SupplierManager = lazy(() => import("./components/SupplierManager"));
+const PricesManager = lazy(() => import("./components/PricesManager"));
 
 const LOCAL_CACHE_KEY = "game_crm_srm_db_cache";
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
@@ -165,7 +167,7 @@ export default function App() {
   // Global Database State
   const [db, setDb] = useState<DatabaseState>(EMPTY_DB);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
@@ -1619,6 +1621,17 @@ export default function App() {
             <Package className="w-4 h-4" />
             Товари
           </button>
+          <button
+            onClick={() => setActiveTab("prices")}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+              activeTab === "prices"
+                ? "bg-emerald-600 text-white"
+                : "text-gray-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <LineChart className="w-4 h-4" />
+            Ціни
+          </button>
         </div>
 
         {/* Loading Spinner */}
@@ -1722,6 +1735,10 @@ export default function App() {
                     onAddTask={handleAddTask}
                     onUpdateTask={handleUpdateTask}
                   />
+                )}
+
+                {activeTab === "prices" && (
+                  <PricesManager suppliers={visibleSuppliers} />
                 )}
                 </Suspense>
               </motion.div>
