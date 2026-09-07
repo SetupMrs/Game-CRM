@@ -101,13 +101,33 @@ export default function PricesManager({ suppliers }: PricesManagerProps) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return flatProducts;
-    return flatProducts.filter(fp => {
-      if (fp.product.title.toLowerCase().includes(q)) return true;
-      if (fp.supplierName.toLowerCase().includes(q)) return true;
-      return (fp.product.items || []).some(
-        it => (it.code && it.code.toLowerCase().includes(q)) || (it.title && it.title.toLowerCase().includes(q))
-      );
-    });
+
+    // Relevance rank: lower is better. 0 = exact title match, 1 = title
+    // starts with the query, 2 = title contains it, 3 = only the supplier
+    // name matches, 4 = only an item's code/title matches.
+    const rank = (fp: FlatProduct): number => {
+      const title = fp.product.title.toLowerCase();
+      if (title === q) return 0;
+      if (title.startsWith(q)) return 1;
+      if (title.includes(q)) return 2;
+      if (fp.supplierName.toLowerCase().includes(q)) return 3;
+      return 4;
+    };
+
+    return flatProducts
+      .filter(fp => {
+        if (fp.product.title.toLowerCase().includes(q)) return true;
+        if (fp.supplierName.toLowerCase().includes(q)) return true;
+        return (fp.product.items || []).some(
+          it => (it.code && it.code.toLowerCase().includes(q)) || (it.title && it.title.toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => {
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) return ra - rb;
+        return a.product.title.localeCompare(b.product.title, "uk");
+      });
   }, [flatProducts, search]);
 
   const stats = useMemo(() => {
