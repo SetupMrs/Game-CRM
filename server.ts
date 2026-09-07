@@ -152,13 +152,56 @@ function bootstrapInitialAdmin() {
 bootstrapInitialAdmin();
 
 // In-memory sessions, mapping a bearer token to the authenticated user.
-// Fine for a small team; sessions reset when the server process restarts.
+// Sessions are stored in SQLite (not just in-memory) so people stay logged
+// in across server restarts — every deploy previously ran `pm2 restart`,
+// which wiped everyone's session and forced a re-login even though nothing
+// about their account changed. Sessions expire after 30 days regardless.
 interface Session {
   userId: string;
   username: string;
   role: UserRole;
 }
-const activeSessions = new Map<string, Session>();
+const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+`);
+
+function createSession(userId: string, username: string, role: UserRole): string {
+  const token = crypto.randomBytes(32).toString("hex");
+  const now = new Date();
+  const expires = new Date(now.getTime() + SESSION_LIFETIME_MS);
+  sqlite.prepare(
+    "INSERT INTO sessions (token, user_id, username, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(token, userId, username, role, now.toISOString(), expires.toISOString());
+  return token;
+}
+
+function getSession(token: string): Session | null {
+  if (!token) return null;
+  const row = sqlite.prepare("SELECT * FROM sessions WHERE token = ?").get(token) as any;
+  if (!row) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    sqlite.prepare("DELETE FROM sessions WHERE token = ?").run(token); // lazily clean up expired sessions
+    return null;
+  }
+  return { userId: row.user_id, username: row.username, role: row.role };
+}
+
+function deleteSession(token: string) {
+  sqlite.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+}
+
+function deleteSessionsForUser(userId: string) {
+  sqlite.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+}
 
 // Brute-force protection for the login endpoint, keyed by IP. Deliberately
 // generic error messages everywhere below so a failed attempt never reveals
@@ -205,14 +248,13 @@ app.post("/api/auth/login", (req, res) => {
   }
 
   loginAttempts.delete(ip);
-  const token = crypto.randomBytes(32).toString("hex");
-  activeSessions.set(token, { userId: user.id, username: user.username, role: user.role });
+  const token = createSession(user.id, user.username, user.role);
   res.json({ status: "success", token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
 app.get("/api/auth/me", (req, res) => {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const session = token ? activeSessions.get(token) : undefined;
+  const session = getSession(token);
   if (!session) {
     return res.status(401).json({ status: "error", message: "Потрібна авторизація." });
   }
@@ -221,13 +263,13 @@ app.get("/api/auth/me", (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  activeSessions.delete(token);
+  deleteSession(token);
   res.json({ status: "success" });
 });
 
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const session = token ? activeSessions.get(token) : undefined;
+  const session = getSession(token);
   if (!session) {
     return res.status(401).json({ status: "error", message: "Потрібна авторизація." });
   }
@@ -299,9 +341,7 @@ app.post("/api/users/:id/reset-password", requireAuth, (req, res) => {
   sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(password), req.params.id);
   // Invalidate any existing sessions for this user so an old, possibly
   // compromised session can't keep using the account after a password reset.
-  for (const [token, session] of activeSessions) {
-    if (session.userId === req.params.id) activeSessions.delete(token);
-  }
+  deleteSessionsForUser(req.params.id);
   res.json({ status: "success" });
 });
 
@@ -317,9 +357,7 @@ app.delete("/api/users/:id", requireAuth, (req, res) => {
     }
   }
   sqlite.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
-  for (const [token, session] of activeSessions) {
-    if (session.userId === req.params.id) activeSessions.delete(token);
-  }
+  deleteSessionsForUser(req.params.id);
   res.json({ status: "success" });
 });
 
