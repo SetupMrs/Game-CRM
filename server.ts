@@ -883,19 +883,67 @@ if (LETSKEYS_AUTO_SYNC_HOURS > 0) {
 // read-only external reference list synced through the normal steamWatches
 // collection in the DB.
 const STEAM_WATCH_COUNTRIES: { code: string; label: string }[] = [
-  { code: "us", label: "US" },
-  { code: "ua", label: "UA" },
   { code: "ru", label: "RU" },
+  { code: "ua", label: "UA" },
+  { code: "kz", label: "KZ" },
+  { code: "by", label: "BY" },
+  { code: "us", label: "US" },
+  { code: "gb", label: "GB" },
+  { code: "de", label: "DE" },
+  { code: "fr", label: "FR" },
+  { code: "tr", label: "TR" },
+  { code: "pl", label: "PL" },
+  { code: "cz", label: "CZ" },
+  { code: "in", label: "IN" },
   { code: "br", label: "BR" },
-  { code: "cn", label: "CN" },
+  { code: "ar", label: "AR" },
+  { code: "mx", label: "MX" },
   { code: "cl", label: "CL" },
+  { code: "co", label: "CO" },
+  { code: "pe", label: "PE" },
   { code: "id", label: "ID" },
   { code: "ph", label: "PH" },
-  { code: "in", label: "IN" },
-  { code: "tr", label: "TR" },
-  { code: "kz", label: "KZ" },
-  { code: "pl", label: "PL" }
+  { code: "my", label: "MY" },
+  { code: "sg", label: "SG" },
+  { code: "th", label: "TH" },
+  { code: "vn", label: "VN" },
+  { code: "cn", label: "CN" },
+  { code: "hk", label: "HK" },
+  { code: "tw", label: "TW" },
+  { code: "jp", label: "JP" },
+  { code: "kr", label: "KR" },
+  { code: "au", label: "AU" },
+  { code: "nz", label: "NZ" },
+  { code: "ca", label: "CA" },
+  { code: "il", label: "IL" },
+  { code: "sa", label: "SA" },
+  { code: "ae", label: "AE" },
+  { code: "za", label: "ZA" },
+  { code: "no", label: "NO" },
+  { code: "se", label: "SE" },
+  { code: "ch", label: "CH" }
 ];
+
+// Fetches a batch of countries concurrently instead of one-by-one — with
+// ~38 countries a strictly sequential 150ms-spaced loop would take 5-6+
+// seconds per item; small parallel batches keep it fast while still being
+// reasonably polite to Valve's API.
+async function fetchSteamPricesForCountries(
+  packageId: string,
+  countries: { code: string; label: string }[]
+): Promise<Map<string, { name?: string; headerImage?: string; currency?: string; price?: number } | null>> {
+  const BATCH_SIZE = 6;
+  const results = new Map<string, { name?: string; headerImage?: string; currency?: string; price?: number } | null>();
+  for (let i = 0; i < countries.length; i += BATCH_SIZE) {
+    const batch = countries.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(c => fetchSteamPackageForCountry(packageId, c.code)));
+    batch.forEach((c, idx) => results.set(c.code, batchResults[idx]));
+    if (i + BATCH_SIZE < countries.length) {
+      await new Promise(r => setTimeout(r, 150)); // brief pause between batches
+    }
+  }
+  return results;
+}
 
 // Accepts either a bare numeric id or a full store URL like
 // https://store.steampowered.com/sub/1544395/Some_Name/
@@ -942,9 +990,9 @@ app.post("/api/steam-watch/lookup", requireAuth, async (req, res) => {
   let headerImage: string | undefined;
   const prices: any[] = [];
 
+  const results = await fetchSteamPricesForCountries(packageId, STEAM_WATCH_COUNTRIES);
   for (const country of STEAM_WATCH_COUNTRIES) {
-    const result = await fetchSteamPackageForCountry(packageId, country.code);
-    await new Promise(r => setTimeout(r, 150)); // polite pacing, same spirit as the LetsKeys sync
+    const result = results.get(country.code);
     if (!result) continue;
     if (!title && result.name) title = result.name;
     if (!headerImage && result.headerImage) headerImage = result.headerImage;
@@ -988,11 +1036,35 @@ async function runSteamWatchAutoSync() {
 
     for (const watch of watches) {
       let watchChanged = false;
-      const updatedPrices = [];
+      const existingByCountry: Record<string, any> = {};
+      (watch.prices || []).forEach((entry: any) => {
+        existingByCountry[entry.countryCode] = entry;
+      });
 
-      for (const entry of watch.prices || []) {
-        const result = await fetchSteamPackageForCountry(watch.packageId, entry.countryCode);
-        await new Promise(r => setTimeout(r, 150));
+      // Fetch every country from the canonical list — this both refreshes
+      // already-tracked countries and backfills any that were added to
+      // STEAM_WATCH_COUNTRIES after this item was first watched.
+      const results = await fetchSteamPricesForCountries(watch.packageId, STEAM_WATCH_COUNTRIES);
+
+      const updatedPrices: any[] = [];
+      for (const country of STEAM_WATCH_COUNTRIES) {
+        const entry = existingByCountry[country.code];
+        const result = results.get(country.code);
+
+        if (!entry) {
+          // New country for this item — add it if Steam actually has a price.
+          if (result && typeof result.price === "number") {
+            updatedPrices.push({
+              id: `${watch.packageId}-${country.code}`,
+              countryCode: country.code,
+              currency: result.currency,
+              price: result.price,
+              priceHistory: []
+            });
+            watchChanged = true;
+          }
+          continue;
+        }
 
         if (!result || typeof result.price !== "number") {
           updatedPrices.push(entry);
@@ -1021,6 +1093,12 @@ async function runSteamWatchAutoSync() {
           updatedPrices.push(entry);
         }
       }
+
+      // Re-ordering to match STEAM_WATCH_COUNTRIES (RU first) counts as a
+      // change too, even with no price movement, so the UI order stays correct.
+      const currentOrder = (watch.prices || []).map((e: any) => e.countryCode).join(",");
+      const newOrder = updatedPrices.map((e: any) => e.countryCode).join(",");
+      if (newOrder !== currentOrder) watchChanged = true;
 
       if (watchChanged) {
         watch.prices = updatedPrices;

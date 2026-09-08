@@ -4,8 +4,13 @@ import { formatDate } from "../utils";
 import { Search, TrendingUp, TrendingDown, X, ChevronRight, ArrowLeft, Zap, Hand, Gamepad2, RefreshCw, Plus } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
-  us: "США", ua: "Україна", ru: "Росія", br: "Бразилія", cn: "Китай", cl: "Чилі",
-  id: "Індонезія", ph: "Філіппіни", in: "Індія", tr: "Туреччина", kz: "Казахстан", pl: "Польща"
+  ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
+  de: "Німеччина", fr: "Франція", tr: "Туреччина", pl: "Польща", cz: "Чехія", in: "Індія",
+  br: "Бразилія", ar: "Аргентина", mx: "Мексика", cl: "Чилі", co: "Колумбія", pe: "Перу",
+  id: "Індонезія", ph: "Філіппіни", my: "Малайзія", sg: "Сінгапур", th: "Таїланд", vn: "В'єтнам",
+  cn: "Китай", hk: "Гонконг", tw: "Тайвань", jp: "Японія", kr: "Корея", au: "Австралія",
+  nz: "Н. Зеландія", ca: "Канада", il: "Ізраїль", sa: "С. Аравія", ae: "ОАЕ", za: "ПАР",
+  no: "Норвегія", se: "Швеція", ch: "Швейцарія"
 };
 
 interface PricesManagerProps {
