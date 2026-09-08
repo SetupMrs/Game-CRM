@@ -1,10 +1,19 @@
 import React, { useMemo, useState } from "react";
-import { Supplier, ProductCard, PriceHistoryEntry, CategoryItem } from "../types";
+import { Supplier, ProductCard, PriceHistoryEntry, CategoryItem, SteamWatchItem } from "../types";
 import { formatDate } from "../utils";
-import { Search, TrendingUp, TrendingDown, X, ChevronRight, ArrowLeft, Zap, Hand } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, X, ChevronRight, ArrowLeft, Zap, Hand, Gamepad2, RefreshCw, Plus } from "lucide-react";
+
+const STEAM_COUNTRY_LABELS: Record<string, string> = {
+  us: "США", ua: "Україна", ru: "Росія", br: "Бразилія", cn: "Китай", cl: "Чилі",
+  id: "Індонезія", ph: "Філіппіни", in: "Індія", tr: "Туреччина", kz: "Казахстан", pl: "Польща"
+};
 
 interface PricesManagerProps {
   suppliers: Supplier[];
+  steamWatches: SteamWatchItem[];
+  onAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string }>;
+  onRemoveSteamWatch: (id: string) => void;
+  onSyncSteamWatchNow: () => Promise<boolean>;
 }
 
 interface FlatProduct {
@@ -48,7 +57,7 @@ function formatDateTime(iso: string): string {
   }
 }
 
-export default function PricesManager({ suppliers }: PricesManagerProps) {
+export default function PricesManager({ suppliers, steamWatches, onAddSteamWatch, onRemoveSteamWatch, onSyncSteamWatchNow }: PricesManagerProps) {
   const [search, setSearch] = useState("");
   const [openProductKey, setOpenProductKey] = useState<string | null>(null);
   const [openGroupKey, setOpenGroupKey] = useState<string | null>(null);
@@ -287,6 +296,15 @@ export default function PricesManager({ suppliers }: PricesManagerProps) {
           </div>
         </div>
       )}
+
+      <div className="border-t border-white/5 pt-4">
+        <SteamWatchSection
+          steamWatches={steamWatches}
+          onAdd={onAddSteamWatch}
+          onRemove={onRemoveSteamWatch}
+          onSyncNow={onSyncSteamWatchNow}
+        />
+      </div>
     </div>
   );
 }
@@ -469,7 +487,7 @@ interface PriceRowProps {
   currency?: string;
   trend: Trend;
   prevEntry?: PriceHistoryEntry;
-  source: "letskeys" | "manual";
+  source: "letskeys" | "manual" | "steam";
   sourceCount?: number;
   onClick: () => void;
 }
@@ -491,6 +509,10 @@ function PriceRow({ title, code, price, currency, trend, prevEntry, source, sour
           {source === "letskeys" ? (
             <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-sm shrink-0">
               API
+            </span>
+          ) : source === "steam" ? (
+            <span className="bg-sky-500/10 text-sky-300 border border-sky-500/20 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-sm shrink-0">
+              Steam
             </span>
           ) : (
             <span className="bg-white/5 text-gray-400 border border-white/10 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-sm shrink-0">
@@ -665,3 +687,307 @@ function PriceChart({ points, currency }: { points: { date: string; price: numbe
     </div>
   );
 }
+
+// --- External Steam price watch (separate data source, not tied to suppliers) ---
+
+function SteamWatchSection({
+  steamWatches,
+  onAdd,
+  onRemove,
+  onSyncNow
+}: {
+  steamWatches: SteamWatchItem[];
+  onAdd: (input: string) => Promise<{ success: boolean; message?: string }>;
+  onRemove: (id: string) => void;
+  onSyncNow: () => Promise<boolean>;
+}) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [openWatchId, setOpenWatchId] = useState<string | null>(null);
+  const [openCountryId, setOpenCountryId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!input.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    const result = await onAdd(input.trim());
+    setBusy(false);
+    if (result.success) {
+      setInput("");
+      setShowAddForm(false);
+    } else {
+      setError(result.message || "Не вдалося додати товар.");
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    await onSyncNow();
+    // The sync runs in the background on the server — this is just a short
+    // visual acknowledgement, not a wait for the actual result.
+    setTimeout(() => setSyncing(false), 1500);
+  };
+
+  const openWatch = steamWatches.find(w => w.id === openWatchId) || null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Gamepad2 className="w-4 h-4 text-gray-500" />
+          <p className="text-sm font-bold text-white">Зовнішні ціни (Steam)</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {steamWatches.length > 0 && (
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="text-xs text-gray-400 hover:text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} /> Оновити зараз
+            </button>
+          )}
+          <button
+            onClick={() => setShowAddForm(v => !v)}
+            className="text-xs bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" /> Додати
+          </button>
+        </div>
+      </div>
+
+      {showAddForm && (
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-3 space-y-2">
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Встав посилання store.steampowered.com/sub/... або сам package id"
+            className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-600/50"
+            onKeyDown={e => {
+              if (e.key === "Enter") handleSubmit();
+            }}
+          />
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={handleSubmit}
+              disabled={busy}
+              className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+            >
+              {busy ? "Шукаю..." : "Додати"}
+            </button>
+            <button
+              onClick={() => {
+                setShowAddForm(false);
+                setError(null);
+              }}
+              className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer"
+            >
+              Скасувати
+            </button>
+          </div>
+        </div>
+      )}
+
+      {steamWatches.length === 0 && !showAddForm ? (
+        <p className="text-xs text-gray-500 py-2">Ще немає товарів у спостереженні.</p>
+      ) : (
+        <div className="border border-white/5 rounded-xl overflow-hidden divide-y divide-white/5">
+          {steamWatches.map(watch => {
+            let up = 0;
+            let down = 0;
+            (watch.prices || []).forEach(p => {
+              const t = priceTrend(p.price, p.priceHistory?.[0], p.currency);
+              if (t === "up") up++;
+              if (t === "down") down++;
+            });
+            return (
+              <div key={watch.id} className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors">
+                <button onClick={() => setOpenWatchId(watch.id)} className="min-w-0 flex-1 text-left cursor-pointer">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-white font-medium text-sm truncate max-w-[220px] sm:max-w-xs">{watch.title}</span>
+                    <span className="bg-sky-500/10 text-sky-300 border border-sky-500/20 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-sm shrink-0">
+                      Steam
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {(watch.prices || []).length} кра{(watch.prices || []).length === 1 ? "їна" : "їн"}
+                    {watch.lastSyncedAt && ` · синхр. ${formatDate(watch.lastSyncedAt)}`}
+                  </p>
+                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {up > 0 && (
+                    <span className="flex items-center gap-0.5 text-amber-400 text-xs font-bold font-mono">
+                      <TrendingUp className="w-3.5 h-3.5" /> {up}
+                    </span>
+                  )}
+                  {down > 0 && (
+                    <span className="flex items-center gap-0.5 text-emerald-400 text-xs font-bold font-mono">
+                      <TrendingDown className="w-3.5 h-3.5" /> {down}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => onRemove(watch.id)}
+                    className="p-1 hover:bg-white/5 rounded cursor-pointer"
+                    title="Прибрати зі спостереження"
+                  >
+                    <X className="w-3.5 h-3.5 text-gray-500" />
+                  </button>
+                  <ChevronRight className="w-4 h-4 text-gray-600 cursor-pointer" onClick={() => setOpenWatchId(watch.id)} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {openWatch && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setOpenWatchId(null);
+            setOpenCountryId(null);
+          }}
+        >
+          <div
+            className="bg-[#161618] border border-white/10 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between shrink-0">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-white truncate">{openWatch.title}</p>
+                <p className="text-[11px] text-gray-500">Steam package #{openWatch.packageId}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setOpenWatchId(null);
+                  setOpenCountryId(null);
+                }}
+                className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {openCountryId ? (
+                (() => {
+                  const entry = (openWatch.prices || []).find(p => p.id === openCountryId);
+                  if (!entry) return null;
+                  const label = STEAM_COUNTRY_LABELS[entry.countryCode] || entry.countryCode.toUpperCase();
+                  return (
+                    <GenericHistoryView
+                      title={`${openWatch.title} · ${label}`}
+                      currency={entry.currency || "USD"}
+                      currentPrice={entry.price}
+                      history={entry.priceHistory || []}
+                      onBack={() => setOpenCountryId(null)}
+                    />
+                  );
+                })()
+              ) : (
+                <div className="divide-y divide-white/5">
+                  {(openWatch.prices || []).map(entry => {
+                    const trend = priceTrend(entry.price, entry.priceHistory?.[0], entry.currency);
+                    const label = STEAM_COUNTRY_LABELS[entry.countryCode] || entry.countryCode.toUpperCase();
+                    return (
+                      <PriceRow
+                        key={entry.id}
+                        title={label}
+                        price={entry.price}
+                        currency={entry.currency}
+                        trend={trend}
+                        prevEntry={entry.priceHistory?.[0]}
+                        source="steam"
+                        onClick={() => setOpenCountryId(entry.id)}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Generic price history view (source-agnostic version of ItemHistoryView,
+// used for Steam watch entries which aren't tied to a ProductCard/CategoryItem) ---
+
+function GenericHistoryView({
+  title,
+  currency,
+  currentPrice,
+  history,
+  onBack
+}: {
+  title: string;
+  currency: string;
+  currentPrice?: number;
+  history: PriceHistoryEntry[];
+  onBack: () => void;
+}) {
+  const points = useMemo(() => {
+    const sorted = [...history].sort((a, b) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime());
+    const pts = sorted.map(h => ({ date: h.changedAt, price: h.price }));
+    if (typeof currentPrice === "number") {
+      pts.push({ date: new Date().toISOString(), price: currentPrice });
+    }
+    return pts;
+  }, [history, currentPrice]);
+
+  const timelineDesc = useMemo(() => [...points].reverse(), [points]);
+
+  return (
+    <div className="p-4 space-y-4">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer">
+        <ArrowLeft className="w-3.5 h-3.5" /> Назад
+      </button>
+
+      <p className="text-sm font-bold text-white">{title}</p>
+
+      {points.length < 2 ? (
+        <p className="text-center text-gray-500 text-sm py-8">
+          Історія змін ціни поки що порожня — зміни зʼявляться тут після першого коригування ціни.
+        </p>
+      ) : (
+        <PriceChart points={points} currency={currency} />
+      )}
+
+      {points.length > 0 && (
+        <div className="border border-white/5 rounded-xl overflow-hidden">
+          <div className="px-3 py-2 bg-[#111112] text-[9px] font-bold text-gray-400 uppercase border-b border-white/5">
+            Хронологія (від сьогодні)
+          </div>
+          <div className="divide-y divide-white/5 max-h-64 overflow-y-auto">
+            {timelineDesc.map((p, i) => {
+              const prevChrono = timelineDesc[i + 1];
+              const diff = prevChrono ? p.price - prevChrono.price : 0;
+              return (
+                <div key={p.date + i} className="flex items-center justify-between px-3 py-2.5">
+                  <span className="text-xs text-gray-400">{i === 0 ? "Сьогодні / поточна" : formatDateTime(p.date)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-bold text-white">
+                      {p.price} {currency}
+                    </span>
+                    {prevChrono && diff !== 0 && (
+                      <span className={`text-[10px] font-mono ${diff > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                        {diff > 0 ? "↑" : "↓"} {diff > 0 ? "+" : ""}
+                        {diff}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

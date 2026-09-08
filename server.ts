@@ -371,7 +371,7 @@ app.delete("/api/users/:id", requireAuth, (req, res) => {
 const DEFAULT_CURRENCY_RATES = { USD: 1, RUB: 0.0105, UAH: 0.024 };
 const DEFAULT_BASE_CURRENCY = "USD";
 
-const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "activityLog", "budgets", "taskTemplates"] as const;
+const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "activityLog", "budgets", "taskTemplates", "steamWatches", "ggselCategories", "ggselItems"] as const;
 
 const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
   tasks: "tasks",
@@ -379,7 +379,10 @@ const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
   suppliers: "suppliers",
   activityLog: "activity_log",
   budgets: "budgets",
-  taskTemplates: "task_templates"
+  taskTemplates: "task_templates",
+  steamWatches: "steam_watches",
+  ggselCategories: "ggsel_categories",
+  ggselItems: "ggsel_items"
 };
 
 function normalizeCurrencyRates(value: any, baseCurrency: string): Record<string, number> {
@@ -410,6 +413,9 @@ sqlite.exec(`
   CREATE TABLE IF NOT EXISTS activity_log (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS task_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS steam_watches (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS ggsel_categories (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS ggsel_items (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `);
 
@@ -864,6 +870,208 @@ if (LETSKEYS_AUTO_SYNC_HOURS > 0) {
   console.log(`[AutoSync] Автоматична синхронізація цін LetsKeys увімкнена — кожні ${LETSKEYS_AUTO_SYNC_HOURS} год.`);
 } else {
   console.log("[AutoSync] Автоматична синхронізація вимкнена (LETSKEYS_AUTO_SYNC_HOURS не задано або 0).");
+}
+
+// ---------------------------------------------------------------------------
+// Steam external price watch (background job)
+// ---------------------------------------------------------------------------
+// Lets the user watch the price of any Steam "package" (a store bundle/sub,
+// e.g. https://store.steampowered.com/sub/1544395/) across several countries
+// at once. Sourced straight from Valve's own public storefront API — the
+// same data SteamDB itself is built on — so no scraping/ToS risk involved.
+// Unlike LetsKeys, this has nothing to do with suppliers/products; it's a
+// read-only external reference list synced through the normal steamWatches
+// collection in the DB.
+const STEAM_WATCH_COUNTRIES: { code: string; label: string }[] = [
+  { code: "us", label: "US" },
+  { code: "ua", label: "UA" },
+  { code: "ru", label: "RU" },
+  { code: "br", label: "BR" },
+  { code: "cn", label: "CN" },
+  { code: "cl", label: "CL" },
+  { code: "id", label: "ID" },
+  { code: "ph", label: "PH" },
+  { code: "in", label: "IN" },
+  { code: "tr", label: "TR" },
+  { code: "kz", label: "KZ" },
+  { code: "pl", label: "PL" }
+];
+
+// Accepts either a bare numeric id or a full store URL like
+// https://store.steampowered.com/sub/1544395/Some_Name/
+function extractSteamPackageId(input: string): string | null {
+  const trimmed = (input || "").trim();
+  if (/^[0-9]+$/.test(trimmed)) return trimmed;
+  const match = trimmed.match(/\/sub\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+async function fetchSteamPackageForCountry(
+  packageId: string,
+  countryCode: string
+): Promise<{ name?: string; headerImage?: string; currency?: string; price?: number } | null> {
+  try {
+    const url = `https://store.steampowered.com/api/packagedetails?packageids=${encodeURIComponent(packageId)}&cc=${encodeURIComponent(countryCode)}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    const entry = data?.[packageId];
+    if (!entry?.success || !entry?.data) return null;
+    const d = entry.data;
+    const priceValue = typeof d.price?.final === "number" ? d.price.final / 100 : undefined;
+    return {
+      name: d.name,
+      headerImage: d.header_image || d.small_logo,
+      currency: d.price?.currency,
+      price: priceValue
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Looks up a package once across every default country — used when the
+// person first adds a Steam item to their watch list.
+app.post("/api/steam-watch/lookup", requireAuth, async (req, res) => {
+  const packageId = extractSteamPackageId(String(req.body?.input || ""));
+  if (!packageId) {
+    return res.status(400).json({ status: "error", message: "Не вдалося розпізнати package id. Встав посилання на sub або сам номер (напр. 1544395)." });
+  }
+
+  let title: string | undefined;
+  let headerImage: string | undefined;
+  const prices: any[] = [];
+
+  for (const country of STEAM_WATCH_COUNTRIES) {
+    const result = await fetchSteamPackageForCountry(packageId, country.code);
+    await new Promise(r => setTimeout(r, 150)); // polite pacing, same spirit as the LetsKeys sync
+    if (!result) continue;
+    if (!title && result.name) title = result.name;
+    if (!headerImage && result.headerImage) headerImage = result.headerImage;
+    prices.push({
+      id: `${packageId}-${country.code}`,
+      countryCode: country.code,
+      currency: result.currency,
+      price: result.price,
+      priceHistory: []
+    });
+  }
+
+  if (!title) {
+    return res.status(404).json({ status: "error", message: "Steam не знайшов такий package (перевір посилання/id)." });
+  }
+
+  res.json({ status: "success", packageId, title, headerImage, prices });
+});
+
+let isSteamWatchSyncRunning = false;
+
+async function runSteamWatchAutoSync() {
+  if (isSteamWatchSyncRunning) {
+    console.log("[SteamWatch] Попередній запуск ще триває, пропускаю.");
+    return;
+  }
+  isSteamWatchSyncRunning = true;
+  try {
+    const db = readDb();
+    const watches: any[] = (db.steamWatches || []);
+    if (watches.length === 0) {
+      console.log("[SteamWatch] Список спостереження порожній — пропущено.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let priceChangedCount = 0;
+    let itemsTouched = 0;
+
+    console.log(`[SteamWatch] Початок синхронізації цін Steam (${watches.length} товар(ів))...`);
+
+    for (const watch of watches) {
+      let watchChanged = false;
+      const updatedPrices = [];
+
+      for (const entry of watch.prices || []) {
+        const result = await fetchSteamPackageForCountry(watch.packageId, entry.countryCode);
+        await new Promise(r => setTimeout(r, 150));
+
+        if (!result || typeof result.price !== "number") {
+          updatedPrices.push(entry);
+          continue;
+        }
+
+        if (typeof entry.price === "number" && entry.price !== result.price) {
+          const historyEntry = {
+            id: crypto.randomUUID(),
+            price: entry.price,
+            currency: entry.currency,
+            changedAt: now
+          };
+          updatedPrices.push({
+            ...entry,
+            price: result.price,
+            currency: result.currency || entry.currency,
+            priceHistory: [historyEntry, ...(entry.priceHistory || [])].slice(0, 50)
+          });
+          priceChangedCount++;
+          watchChanged = true;
+        } else if (typeof entry.price !== "number") {
+          updatedPrices.push({ ...entry, price: result.price, currency: result.currency || entry.currency });
+          watchChanged = true;
+        } else {
+          updatedPrices.push(entry);
+        }
+      }
+
+      if (watchChanged) {
+        watch.prices = updatedPrices;
+        watch.lastSyncedAt = now;
+        itemsTouched++;
+      }
+    }
+
+    if (itemsTouched > 0) {
+      db.activityLog = [
+        {
+          id: crypto.randomUUID(),
+          timestamp: now,
+          actorName: "Автосинхронізація",
+          action: "Оновив ціни Steam (автоматично)",
+          entityType: "product",
+          entityTitle: `${itemsTouched} товар(ів)`,
+          details: `Зміна ціни: ${priceChangedCount}`
+        },
+        ...(db.activityLog || [])
+      ].slice(0, 300);
+
+      const result = writeDb(db, false);
+      if (!result.success) {
+        console.warn("[SteamWatch] Запис заблоковано або не вдався:", result.blockedCollections || "невідома причина");
+      } else {
+        console.log(`[SteamWatch] Готово. Оновлено товарів: ${itemsTouched}, зміна ціни: ${priceChangedCount}.`);
+      }
+    } else {
+      console.log("[SteamWatch] Готово, змін немає.");
+    }
+  } catch (error) {
+    console.error("[SteamWatch] Несподівана помилка:", error);
+  } finally {
+    isSteamWatchSyncRunning = false;
+  }
+}
+
+app.post("/api/steam-watch/sync-now", requireAuth, (req, res) => {
+  runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err));
+  res.json({ status: "success", message: "Синхронізацію запущено у фоні." });
+});
+
+const STEAM_WATCH_AUTO_SYNC_HOURS = Number(process.env.STEAM_WATCH_AUTO_SYNC_HOURS) || 12;
+if (STEAM_WATCH_AUTO_SYNC_HOURS > 0) {
+  const steamIntervalMs = STEAM_WATCH_AUTO_SYNC_HOURS * 60 * 60 * 1000;
+  setTimeout(() => { runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err)); }, 3 * 60 * 1000);
+  setInterval(() => { runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err)); }, steamIntervalMs);
+  console.log(`[SteamWatch] Автоматична синхронізація цін Steam увімкнена — кожні ${STEAM_WATCH_AUTO_SYNC_HOURS} год.`);
+} else {
+  console.log("[SteamWatch] Автоматична синхронізація Steam вимкнена (STEAM_WATCH_AUTO_SYNC_HOURS=0).");
 }
 
 // Configure Vite middleware or Static files serving

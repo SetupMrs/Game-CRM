@@ -18,9 +18,10 @@ import {
   Bell,
   TrendingUp,
   LineChart,
+  Store,
   Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
@@ -35,6 +36,7 @@ const TaskManager = lazy(() => import("./components/TaskManager"));
 const FinanceManager = lazy(() => import("./components/FinanceManager"));
 const SupplierManager = lazy(() => import("./components/SupplierManager"));
 const PricesManager = lazy(() => import("./components/PricesManager"));
+const GgselManager = lazy(() => import("./components/GgselManager"));
 
 const LOCAL_CACHE_KEY = "game_crm_srm_db_cache";
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
@@ -60,6 +62,9 @@ const EMPTY_DB: DatabaseState = {
   activityLog: [],
   budgets: [],
   taskTemplates: [],
+  steamWatches: [],
+  ggselCategories: [],
+  ggselItems: [],
   baseCurrency: DEFAULT_BASE_CURRENCY,
   currencyRates: { ...DEFAULT_CURRENCY_RATES }
 };
@@ -75,6 +80,9 @@ function normalizeDb(data: any): DatabaseState {
     activityLog: data?.activityLog || [],
     budgets: data?.budgets || [],
     taskTemplates: data?.taskTemplates || [],
+    steamWatches: data?.steamWatches || [],
+    ggselCategories: data?.ggselCategories || [],
+    ggselItems: data?.ggselItems || [],
     baseCurrency,
     currencyRates: (data?.currencyRates && typeof data.currencyRates === "object")
       ? { ...DEFAULT_CURRENCY_RATES, ...data.currencyRates, [baseCurrency]: 1 }
@@ -167,7 +175,7 @@ export default function App() {
   // Global Database State
   const [db, setDb] = useState<DatabaseState>(EMPTY_DB);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices" | "ggsel">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
@@ -1173,6 +1181,133 @@ export default function App() {
     return { addedCount, updatedCount, priceChangedCount, success };
   };
 
+  // --- Зовнішнє відстеження цін Steam (окремо від постачальників) ----------
+
+  // Знаходить товар у Steam і додає його у спостереження, якщо він там ще не
+  // з'явився. Повертає вже наявний запис, якщо він уже відстежується — це
+  // потрібно калькулятору ggsel, щоб не плодити дублікати при повторному
+  // прив'язуванні того самого товару Steam до кількох записів ggsel.
+  const handleLookupOrAddSteamWatch = async (
+    input: string
+  ): Promise<{ success: boolean; message?: string; watch?: SteamWatchItem; alreadyExisted?: boolean }> => {
+    try {
+      const res = await apiFetch("/api/steam-watch/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        return { success: false, message: data?.message || "Не вдалося знайти цей товар у Steam." };
+      }
+
+      const existing = (db.steamWatches || []).find(w => w.packageId === data.packageId);
+      if (existing) {
+        return { success: true, watch: existing, alreadyExisted: true };
+      }
+
+      const newWatch: SteamWatchItem = {
+        id: generateId("steamwatch"),
+        packageId: data.packageId,
+        title: data.title,
+        headerImage: data.headerImage,
+        addedAt: new Date().toISOString(),
+        prices: data.prices || []
+      };
+
+      const updated = { ...db, steamWatches: [newWatch, ...(db.steamWatches || [])] };
+      const success = await saveStateToDisk(withLog(updated, "Додав товар у спостереження Steam", "product", newWatch.title));
+      return { success, watch: success ? newWatch : undefined, message: success ? undefined : "Не вдалося зберегти." };
+    } catch {
+      return { success: false, message: "Не вдалося з'єднатися з сервером." };
+    }
+  };
+
+  const handleAddSteamWatch = async (input: string): Promise<{ success: boolean; message?: string }> => {
+    const result = await handleLookupOrAddSteamWatch(input);
+    if (!result.success) return { success: false, message: result.message };
+    if (result.alreadyExisted) return { success: false, message: "Цей товар уже в списку спостереження." };
+    return { success: true };
+  };
+
+  const handleRemoveSteamWatch = (watchId: string) => {
+    const watch = (db.steamWatches || []).find(w => w.id === watchId);
+    if (!watch) return;
+    const updated = { ...db, steamWatches: (db.steamWatches || []).filter(w => w.id !== watchId) };
+    saveStateToDisk(withLog(updated, "Прибрав товар зі спостереження Steam", "product", watch.title));
+  };
+
+  const handleSyncSteamWatchNow = async (): Promise<boolean> => {
+    try {
+      const res = await apiFetch("/api/steam-watch/sync-now", { method: "POST" });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  // --- Калькулятор цін ggsel -------------------------------------------------
+
+  const handleAddGgselCategory = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const newCat: GgselCategory = { id: generateId("ggselcat"), name: trimmed, createdAt: new Date().toISOString() };
+    const updated = { ...db, ggselCategories: [...(db.ggselCategories || []), newCat] };
+    saveStateToDisk(withLog(updated, "Додав категорію ggsel", "product", trimmed));
+  };
+
+  const handleRemoveGgselCategory = (categoryId: string) => {
+    const cat = (db.ggselCategories || []).find(c => c.id === categoryId);
+    if (!cat) return;
+    const updated = {
+      ...db,
+      ggselCategories: (db.ggselCategories || []).filter(c => c.id !== categoryId),
+      ggselItems: (db.ggselItems || []).filter(i => i.categoryId !== categoryId)
+    };
+    saveStateToDisk(withLog(updated, "Видалив категорію ggsel", "product", cat.name));
+  };
+
+  const handleAddGgselItem = (item: Omit<GgselWatchItem, "id" | "addedAt">) => {
+    const newItem: GgselWatchItem = { ...item, id: generateId("ggselitem"), addedAt: new Date().toISOString() };
+    const updated = { ...db, ggselItems: [newItem, ...(db.ggselItems || [])] };
+    saveStateToDisk(withLog(updated, "Додав товар у ggsel", "product", newItem.title));
+  };
+
+  const handleUpdateGgselItem = (itemId: string, patch: Partial<GgselWatchItem>) => {
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i => (i.id === itemId ? { ...i, ...patch } : i))
+    };
+    saveStateToDisk(updated);
+  };
+
+  const handleUpdateGgselPrice = (itemId: string, newPrice: number) => {
+    const item = (db.ggselItems || []).find(i => i.id === itemId);
+    if (!item) return;
+    const now = new Date().toISOString();
+    let priceHistory = item.ggselPriceHistory || [];
+    if (typeof item.ggselPrice === "number" && item.ggselPrice !== newPrice) {
+      priceHistory = [
+        { id: generateId("pricehist"), price: item.ggselPrice, currency: "RUB", changedAt: now },
+        ...priceHistory
+      ].slice(0, 50);
+    }
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i =>
+        i.id === itemId ? { ...i, ggselPrice: newPrice, ggselPriceHistory: priceHistory } : i
+      )
+    };
+    saveStateToDisk(updated);
+  };
+
+  const handleRemoveGgselItem = (itemId: string) => {
+    const item = (db.ggselItems || []).find(i => i.id === itemId);
+    if (!item) return;
+    const updated = { ...db, ggselItems: (db.ggselItems || []).filter(i => i.id !== itemId) };
+    saveStateToDisk(withLog(updated, "Видалив товар з ggsel", "product", item.title));
+  };
+
   const handleToggleProductAdded = (supId: string, prodId: string) => {
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const targetProd = supplier?.products?.find(p => p.id === prodId);
@@ -1632,6 +1767,17 @@ export default function App() {
             <LineChart className="w-4 h-4" />
             Ціни
           </button>
+          <button
+            onClick={() => setActiveTab("ggsel")}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+              activeTab === "ggsel"
+                ? "bg-emerald-600 text-white"
+                : "text-gray-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <Store className="w-4 h-4" />
+            ggsel
+          </button>
         </div>
 
         {/* Loading Spinner */}
@@ -1738,7 +1884,28 @@ export default function App() {
                 )}
 
                 {activeTab === "prices" && (
-                  <PricesManager suppliers={visibleSuppliers} />
+                  <PricesManager
+                    suppliers={visibleSuppliers}
+                    steamWatches={db.steamWatches || []}
+                    onAddSteamWatch={handleAddSteamWatch}
+                    onRemoveSteamWatch={handleRemoveSteamWatch}
+                    onSyncSteamWatchNow={handleSyncSteamWatchNow}
+                  />
+                )}
+
+                {activeTab === "ggsel" && (
+                  <GgselManager
+                    categories={db.ggselCategories || []}
+                    items={db.ggselItems || []}
+                    steamWatches={db.steamWatches || []}
+                    onAddCategory={handleAddGgselCategory}
+                    onRemoveCategory={handleRemoveGgselCategory}
+                    onAddItem={handleAddGgselItem}
+                    onUpdateItem={handleUpdateGgselItem}
+                    onUpdatePrice={handleUpdateGgselPrice}
+                    onRemoveItem={handleRemoveGgselItem}
+                    onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
+                  />
                 )}
                 </Suspense>
               </motion.div>

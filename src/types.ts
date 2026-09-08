@@ -191,6 +191,52 @@ export interface PriceHistoryEntry {
   changedAt: string; // ISO
 }
 
+// --- Зовнішнє відстеження цін Steam (не пов'язано з постачальниками/LetsKeys) ---
+// Дає можливість спостерігати за ціною будь-якого набору (package) Steam у
+// кількох країнах одночасно, підтягуючи дані напряму з офіційного API Valve.
+export interface SteamPriceEntry {
+  id: string; // стабільний id рядка країни, напр. `${packageId}-${countryCode}`
+  countryCode: string; // ISO-код країни для параметра "cc" у Steam API, напр. "us"
+  currency?: string; // код валюти, який повертає сам Steam для цієї країни
+  price?: number; // фінальна ціна (з урахуванням знижки), звичайне число
+  priceHistory?: PriceHistoryEntry[];
+}
+
+export interface SteamWatchItem {
+  id: string;
+  packageId: string; // Steam "sub" id
+  title: string;
+  headerImage?: string;
+  addedAt: string; // ISO
+  lastSyncedAt?: string; // ISO
+  prices: SteamPriceEntry[];
+}
+
+// --- Калькулятор цін ggsel (перепродаж товарів Steam на ggsel.ru) -----------
+// Категорія — довільна група, яку користувач створює сам (напр. "Steam Gift").
+// Товар прив'язується до конкретного запису SteamWatchItem+countryCode — саме
+// звідти автоматично береться поточна ціна Steam (та ж фонова синхронізація).
+export interface GgselCategory {
+  id: string;
+  name: string;
+  createdAt: string; // ISO
+}
+
+export interface GgselWatchItem {
+  id: string;
+  categoryId: string;
+  title: string;
+  steamPackageId: string; // посилання на SteamWatchItem.packageId
+  steamCountryCode: string; // яку саме "країну" ціни Steam use (SteamPriceEntry.countryCode)
+  exchangeRate?: number; // скільки рублів за 1 одиницю валюти Steam-ціни; не потрібен, якщо валюта вже RUB
+  ggselPrice?: number; // ціна, яку користувач вручну виставив на ggsel (RUB)
+  ggselPriceHistory?: PriceHistoryEntry[]; // історія власних правок ціни на ggsel
+  commission1Percent: number; // перший % комісії ggsel
+  commission2Percent: number; // другий % комісії ggsel
+  myMarginPercent: number; // бажаний % прибутку
+  addedAt: string; // ISO
+}
+
 export interface ProductCard {
   id: string;
   title: string;
@@ -292,6 +338,9 @@ export interface DatabaseState {
   activityLog: ActivityLogEntry[];
   budgets: BudgetPlan[];
   taskTemplates: TaskTemplate[];
+  steamWatches: SteamWatchItem[];
+  ggselCategories: GgselCategory[];
+  ggselItems: GgselWatchItem[];
   baseCurrency: string; // валюта, до якої конвертуються всі підсумки (курс = 1)
   currencyRates: Record<string, number>; // "скільки baseCurrency коштує 1 одиниця валюти", ключ — код валюти
 }
