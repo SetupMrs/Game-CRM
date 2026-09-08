@@ -416,14 +416,26 @@ function GgselItemCard({
   return (
     <div className={`border rounded-xl p-4 space-y-3 ${isStale ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"}`}>
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-white truncate">{item.title}</p>
-          <p className="text-[11px] text-gray-500">
-            Steam ({STEAM_COUNTRY_LABELS[item.steamCountryCode] || item.steamCountryCode.toUpperCase()}):{" "}
-            {typeof steamPrice === "number" ? `${steamPrice} ${steamCurrency}` : "немає даних"}
-            {steamTrend === "up" && <span className="text-amber-400 ml-1">↑ подорожчав</span>}
-            {steamTrend === "down" && <span className="text-emerald-400 ml-1">↓ подешевшав</span>}
-          </p>
+          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+            <span className="text-[11px] text-gray-500">Ціна Steam з країни:</span>
+            <select
+              value={item.steamCountryCode}
+              onChange={e => onUpdateItem(item.id, { steamCountryCode: e.target.value, exchangeRate: undefined })}
+              className="bg-black/30 border border-white/10 rounded-md px-1.5 py-0.5 text-[11px] text-white focus:outline-none focus:border-emerald-600/50 cursor-pointer"
+            >
+              {(watch?.prices || [])
+                .filter(p => typeof p.price === "number")
+                .map(p => (
+                  <option key={p.countryCode} value={p.countryCode}>
+                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {p.price} {p.currency}
+                  </option>
+                ))}
+            </select>
+            {steamTrend === "up" && <span className="text-amber-400 text-[11px]">↑ подорожчав</span>}
+            {steamTrend === "down" && <span className="text-emerald-400 text-[11px]">↓ подешевшав</span>}
+          </div>
         </div>
         <button onClick={() => onRemove(item.id)} className="p-1 hover:bg-white/5 rounded cursor-pointer shrink-0" title="Прибрати">
           <X className="w-4 h-4 text-gray-500" />
