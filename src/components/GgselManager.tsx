@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry } from "../types";
-import { Plus, X, Check, Trash2, AlertTriangle } from "lucide-react";
+import { computeGgselSuggestedPrice } from "../utils";
+import { Plus, X, Check, Trash2, AlertTriangle, Pencil } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
   ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
@@ -23,13 +24,6 @@ interface GgselManagerProps {
   onUpdatePrice: (id: string, newPrice: number) => void;
   onRemoveItem: (id: string) => void;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
-}
-
-// Ціна на ggsel = базова ціна Steam у рублях, послідовно збільшена на кожен
-// відсоток: (1+комісія1%)·(1+комісія2%)·(1+мій%) — саме так, як порахував
-// користувач вручну (1527 → 1652.238432 при 2%+4%+2%).
-function computeSuggestedPrice(baseRub: number, c1: number, c2: number, margin: number): number {
-  return baseRub * (1 + c1 / 100) * (1 + c2 / 100) * (1 + margin / 100);
 }
 
 function steamPriceTrend(current?: number, prevEntry?: PriceHistoryEntry): "up" | "down" | "none" {
@@ -355,7 +349,7 @@ function AddGgselItemPanel({
   );
 }
 
-// --- One tracked ggsel item: live Steam price, calculator, editable fields ---
+// --- One tracked ggsel item: compact card + edit modal --------------------
 
 function GgselItemCard({
   item,
@@ -371,6 +365,8 @@ function GgselItemCard({
   onUpdatePrice: (id: string, newPrice: number) => void;
   onRemove: (id: string) => void;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
   const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
   const steamPrice = entry?.price;
@@ -380,41 +376,22 @@ function GgselItemCard({
   const baseRub = typeof steamPrice === "number" ? (needsRate ? steamPrice * rate : steamPrice) : undefined;
   const suggested =
     typeof baseRub === "number"
-      ? computeSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent)
+      ? computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent)
       : undefined;
   const steamTrend = steamPriceTrend(steamPrice, entry?.priceHistory?.[0]);
 
-  const [priceInput, setPriceInput] = useState(item.ggselPrice != null ? String(item.ggselPrice) : "");
-  const [rateInput, setRateInput] = useState(item.exchangeRate != null ? String(item.exchangeRate) : "");
-  const [c1Input, setC1Input] = useState(String(item.commission1Percent));
-  const [c2Input, setC2Input] = useState(String(item.commission2Percent));
-  const [marginInput, setMarginInput] = useState(String(item.myMarginPercent));
-
-  useEffect(() => setPriceInput(item.ggselPrice != null ? String(item.ggselPrice) : ""), [item.ggselPrice]);
-  useEffect(() => setRateInput(item.exchangeRate != null ? String(item.exchangeRate) : ""), [item.exchangeRate]);
-  useEffect(() => setC1Input(String(item.commission1Percent)), [item.commission1Percent]);
-  useEffect(() => setC2Input(String(item.commission2Percent)), [item.commission2Percent]);
-  useEffect(() => setMarginInput(String(item.myMarginPercent)), [item.myMarginPercent]);
-
-  const commitPrice = () => {
-    const num = parseFloat(priceInput.replace(",", "."));
-    if (!isNaN(num)) onUpdatePrice(item.id, num);
-  };
-
-  const commitFields = () => {
-    onUpdateItem(item.id, {
-      exchangeRate: rateInput ? parseFloat(rateInput.replace(",", ".")) || undefined : undefined,
-      commission1Percent: parseFloat(c1Input.replace(",", ".")) || 0,
-      commission2Percent: parseFloat(c2Input.replace(",", ".")) || 0,
-      myMarginPercent: parseFloat(marginInput.replace(",", ".")) || 0
-    });
-  };
-
-  const diff = typeof suggested === "number" && typeof item.ggselPrice === "number" ? suggested - item.ggselPrice : undefined;
-  const isStale = typeof diff === "number" && Math.abs(diff) > 1;
+  // Загорається лише коли розрахована ціна ВИЩА за ту, що вже стоїть на
+  // ggsel (тобто ціну треба підняти). Якщо користувач сам поставив ціну
+  // вище розрахованої — це його свідомий вибір, попередження не потрібне.
+  const needsPriceIncrease =
+    typeof suggested === "number" && typeof item.ggselPrice === "number" && suggested - item.ggselPrice > 1;
 
   return (
-    <div className={`border rounded-xl p-4 space-y-3 ${isStale ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"}`}>
+    <div
+      className={`border rounded-xl p-4 space-y-3 ${
+        needsPriceIncrease ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-white truncate">{item.title}</p>
@@ -437,48 +414,149 @@ function GgselItemCard({
             {steamTrend === "down" && <span className="text-emerald-400 text-[11px]">↓ подешевшав</span>}
           </div>
         </div>
-        <button onClick={() => onRemove(item.id)} className="p-1 hover:bg-white/5 rounded cursor-pointer shrink-0" title="Прибрати">
-          <X className="w-4 h-4 text-gray-500" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => setIsEditing(true)} className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer" title="Редагувати">
+            <Pencil className="w-3.5 h-3.5 text-gray-500" />
+          </button>
+          <button onClick={() => onRemove(item.id)} className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer" title="Прибрати">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
       </div>
 
-      {isStale && typeof suggested === "number" && (
+      {needsPriceIncrease && typeof suggested === "number" && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
           <p className="text-xs text-amber-300">
-            Рекомендована ціна на ggsel: <b>{suggested.toFixed(2)} ₽</b> (зараз {item.ggselPrice?.toFixed(2)} ₽) — онови вручну на ggsel.
+            Steam подорожчав — рекомендована ціна на ggsel тепер <b>{suggested.toFixed(2)} ₽</b> (у тебе стоїть{" "}
+            {item.ggselPrice?.toFixed(2)} ₽) — підніми ціну на ggsel.
           </p>
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className={labelClass}>Ціна Steam</label>
+          <div className="text-sm font-mono font-bold text-white">
+            {typeof steamPrice === "number" ? `${steamPrice} ${steamCurrency}` : "—"}
+          </div>
+        </div>
         <div>
           <label className={labelClass}>Ціна на ggsel, ₽</label>
-          <input value={priceInput} onChange={e => setPriceInput(e.target.value)} onBlur={commitPrice} inputMode="decimal" className={inputClass} />
+          <div className="text-sm font-mono font-bold text-white">
+            {typeof item.ggselPrice === "number" ? item.ggselPrice.toFixed(2) : "не вказано"}
+          </div>
         </div>
         <div>
           <label className={labelClass}>Розрахована ціна, ₽</label>
-          <div className="px-2 py-1.5 text-sm font-mono font-bold text-emerald-400">
+          <div className={`text-sm font-mono font-bold ${needsPriceIncrease ? "text-amber-400" : "text-emerald-400"}`}>
             {typeof suggested === "number" ? suggested.toFixed(2) : "—"}
           </div>
         </div>
+      </div>
+
+      {isEditing && (
+        <EditGgselItemModal
+          item={item}
+          needsRate={needsRate}
+          steamCurrency={steamCurrency}
+          onUpdateItem={onUpdateItem}
+          onUpdatePrice={onUpdatePrice}
+          onClose={() => setIsEditing(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// --- Modal: enter/edit ggsel price, exchange rate, commissions, margin ----
+
+function EditGgselItemModal({
+  item,
+  needsRate,
+  steamCurrency,
+  onUpdateItem,
+  onUpdatePrice,
+  onClose
+}: {
+  item: GgselWatchItem;
+  needsRate: boolean;
+  steamCurrency: string;
+  onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
+  onUpdatePrice: (id: string, newPrice: number) => void;
+  onClose: () => void;
+}) {
+  const [priceInput, setPriceInput] = useState(item.ggselPrice != null ? String(item.ggselPrice) : "");
+  const [rateInput, setRateInput] = useState(item.exchangeRate != null ? String(item.exchangeRate) : "");
+  const [c1Input, setC1Input] = useState(String(item.commission1Percent));
+  const [c2Input, setC2Input] = useState(String(item.commission2Percent));
+  const [marginInput, setMarginInput] = useState(String(item.myMarginPercent));
+
+  const handleSave = () => {
+    const priceNum = parseFloat(priceInput.replace(",", "."));
+    if (!isNaN(priceNum)) onUpdatePrice(item.id, priceNum);
+    onUpdateItem(item.id, {
+      exchangeRate: rateInput ? parseFloat(rateInput.replace(",", ".")) || undefined : undefined,
+      commission1Percent: parseFloat(c1Input.replace(",", ".")) || 0,
+      commission2Percent: parseFloat(c2Input.replace(",", ".")) || 0,
+      myMarginPercent: parseFloat(marginInput.replace(",", ".")) || 0
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-[#161618] border border-white/10 rounded-xl w-full max-w-md p-5 space-y-3"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-bold text-white truncate">{item.title}</p>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer shrink-0">
+            <X className="w-4 h-4 text-gray-400" />
+          </button>
+        </div>
+
+        <div>
+          <label className={labelClass}>Ціна на ggsel, ₽</label>
+          <input
+            autoFocus
+            value={priceInput}
+            onChange={e => setPriceInput(e.target.value)}
+            inputMode="decimal"
+            className={inputClass}
+          />
+        </div>
+
         {needsRate && (
           <div>
-            <label className={labelClass}>Курс {steamCurrency}→₽</label>
-            <input value={rateInput} onChange={e => setRateInput(e.target.value)} onBlur={commitFields} inputMode="decimal" className={inputClass} />
+            <label className={labelClass}>Курс {steamCurrency} → ₽</label>
+            <input value={rateInput} onChange={e => setRateInput(e.target.value)} placeholder="напр. 95" inputMode="decimal" className={inputClass} />
           </div>
         )}
-        <div>
-          <label className={labelClass}>Комісія 1, %</label>
-          <input value={c1Input} onChange={e => setC1Input(e.target.value)} onBlur={commitFields} inputMode="decimal" className={inputClass} />
-        </div>
-        <div>
-          <label className={labelClass}>Комісія 2, %</label>
-          <input value={c2Input} onChange={e => setC2Input(e.target.value)} onBlur={commitFields} inputMode="decimal" className={inputClass} />
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelClass}>Комісія 1, %</label>
+            <input value={c1Input} onChange={e => setC1Input(e.target.value)} inputMode="decimal" className={inputClass} />
+          </div>
+          <div>
+            <label className={labelClass}>Комісія 2, %</label>
+            <input value={c2Input} onChange={e => setC2Input(e.target.value)} inputMode="decimal" className={inputClass} />
+          </div>
         </div>
         <div>
           <label className={labelClass}>Мій %</label>
-          <input value={marginInput} onChange={e => setMarginInput(e.target.value)} onBlur={commitFields} inputMode="decimal" className={inputClass} />
+          <input value={marginInput} onChange={e => setMarginInput(e.target.value)} inputMode="decimal" className={inputClass} />
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={handleSave} className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg cursor-pointer">
+            Зберегти
+          </button>
+          <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-4 py-2 cursor-pointer">
+            Скасувати
+          </button>
         </div>
       </div>
     </div>

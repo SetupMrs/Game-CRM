@@ -75,3 +75,13 @@ export function getAvatarColor(seed: string): string {
   }
   return TEAM_MEMBER_COLORS[hash % TEAM_MEMBER_COLORS.length];
 }
+
+/**
+ * ggsel-калькулятор: ціна на ggsel = ціна Steam у рублях, послідовно збільшена
+ * на кожен відсоток: (1+комісія1%)·(1+комісія2%)·(1+мій%). Спільна функція,
+ * щоб App.tsx (лічильник сповіщень) і GgselManager.tsx (сама картка)
+ * рахували завжди однаково.
+ */
+export function computeGgselSuggestedPrice(baseRub: number, commission1Percent: number, commission2Percent: number, myMarginPercent: number): number {
+  return baseRub * (1 + commission1Percent / 100) * (1 + commission2Percent / 100) * (1 + myMarginPercent / 100);
+}

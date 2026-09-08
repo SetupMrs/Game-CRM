@@ -22,7 +22,7 @@ import {
   Search
 } from "lucide-react";
 import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
-import { generateId, formatDate } from "./utils";
+import { generateId, formatDate, computeGgselSuggestedPrice } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
 import UsersManager from "./components/UsersManager";
@@ -275,6 +275,24 @@ export default function App() {
     () => priceIncreaseAlerts.filter(a => !seenPriceAlertIds.has(a.id)),
     [priceIncreaseAlerts, seenPriceAlertIds]
   );
+
+  // Скільки товарів у ggsel потребують підняття ціни (Steam подорожчав, а
+  // виставлена на ggsel ціна відстає від розрахованої). Показуємо кількість
+  // бейджем на вкладці "ggsel" — та ж формула, що й у самій картці товару.
+  const ggselNeedsIncreaseCount = useMemo(() => {
+    let count = 0;
+    (db.ggselItems || []).forEach(item => {
+      const watch = (db.steamWatches || []).find(w => w.packageId === item.steamPackageId);
+      const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
+      const steamPrice = entry?.price;
+      if (typeof steamPrice !== "number" || typeof item.ggselPrice !== "number") return;
+      const currency = entry?.currency || "USD";
+      const baseRub = currency !== "RUB" ? steamPrice * (item.exchangeRate || 1) : steamPrice;
+      const suggested = computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent);
+      if (suggested - item.ggselPrice > 1) count++;
+    });
+    return count;
+  }, [db.ggselItems, db.steamWatches]);
 
   const markPriceAlertSeen = (id: string) => {
     setSeenPriceAlertIds(prev => {
@@ -1769,7 +1787,7 @@ export default function App() {
           </button>
           <button
             onClick={() => setActiveTab("ggsel")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+            className={`relative flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
               activeTab === "ggsel"
                 ? "bg-emerald-600 text-white"
                 : "text-gray-400 hover:text-white hover:bg-white/5"
@@ -1777,6 +1795,14 @@ export default function App() {
           >
             <Store className="w-4 h-4" />
             ggsel
+            {ggselNeedsIncreaseCount > 0 && (
+              <span
+                className="absolute -top-1.5 -right-1.5 bg-amber-500 text-black text-[9px] font-bold rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center"
+                title={`Товарів, де треба підняти ціну на ggsel: ${ggselNeedsIncreaseCount}`}
+              >
+                {ggselNeedsIncreaseCount > 9 ? "9+" : ggselNeedsIncreaseCount}
+              </span>
+            )}
           </button>
         </div>
 
