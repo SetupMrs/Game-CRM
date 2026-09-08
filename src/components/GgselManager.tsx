@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry } from "../types";
 import { computeGgselSuggestedPrice } from "../utils";
+import { apiFetch } from "../apiClient";
 import { Plus, X, Check, Trash2, AlertTriangle, Pencil } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
@@ -33,6 +34,30 @@ function steamPriceTrend(current?: number, prevEntry?: PriceHistoryEntry): "up" 
   return "none";
 }
 
+// USD deliberately stays manual — the person tracks their own ggsel exchange
+// rate for it. Every other currency converts automatically via a live rate
+// when we have one, falling back to a manual override if we don't.
+function convertToRub(
+  price: number,
+  currency: string,
+  manualRate: number | undefined,
+  rubRates: Record<string, number>
+): number | undefined {
+  const cur = (currency || "USD").toUpperCase();
+  if (cur === "RUB") return price;
+  if (cur === "USD") return typeof manualRate === "number" ? price * manualRate : undefined;
+  const liveRate = rubRates[cur];
+  if (typeof liveRate === "number") return price * liveRate;
+  return typeof manualRate === "number" ? price * manualRate : undefined;
+}
+
+function usesManualRate(currency: string, rubRates: Record<string, number>): boolean {
+  const cur = (currency || "USD").toUpperCase();
+  if (cur === "RUB") return false;
+  if (cur === "USD") return true;
+  return typeof rubRates[cur] !== "number";
+}
+
 const inputClass =
   "w-full bg-black/30 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-600/50";
 const labelClass = "text-[9px] text-gray-500 uppercase font-bold block mb-1";
@@ -53,6 +78,18 @@ export default function GgselManager({
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
+  const [rubRates, setRubRates] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    apiFetch("/api/steam-watch/rub-rates")
+      .then(res => res.json())
+      .then(data => {
+        if (data?.status === "success" && data.rates) setRubRates(data.rates);
+      })
+      .catch(() => {
+        /* if this fails, the calculator just falls back to manual rates everywhere */
+      });
+  }, []);
 
   useEffect(() => {
     if (!selectedCategoryId && categories.length > 0) {
@@ -166,6 +203,7 @@ export default function GgselManager({
           {showAddItem && selectedCategoryId && (
             <AddGgselItemPanel
               categoryId={selectedCategoryId}
+              rubRates={rubRates}
               onLookupOrAddSteamWatch={onLookupOrAddSteamWatch}
               onAddItem={onAddItem}
               onClose={() => setShowAddItem(false)}
@@ -181,6 +219,7 @@ export default function GgselManager({
                   key={item.id}
                   item={item}
                   steamWatches={steamWatches}
+                  rubRates={rubRates}
                   onUpdateItem={onUpdateItem}
                   onUpdatePrice={onUpdatePrice}
                   onRemove={onRemoveItem}
@@ -198,11 +237,13 @@ export default function GgselManager({
 
 function AddGgselItemPanel({
   categoryId,
+  rubRates,
   onLookupOrAddSteamWatch,
   onAddItem,
   onClose
 }: {
   categoryId: string;
+  rubRates: Record<string, number>;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
   onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
   onClose: () => void;
@@ -237,7 +278,7 @@ function AddGgselItemPanel({
   };
 
   const selectedEntry = watch?.prices.find(p => p.countryCode === countryCode);
-  const needsRate = Boolean(selectedEntry && selectedEntry.currency && selectedEntry.currency !== "RUB");
+  const needsRate = Boolean(selectedEntry?.currency) && usesManualRate(selectedEntry!.currency!, rubRates);
 
   const handleSave = () => {
     if (!watch || !countryCode || !title.trim()) return;
@@ -354,6 +395,7 @@ function AddGgselItemPanel({
 function GgselItemCard({
   item,
   steamWatches,
+  rubRates,
   onUpdateItem,
   onUpdatePrice,
   onRemove
@@ -361,6 +403,7 @@ function GgselItemCard({
   key?: React.Key;
   item: GgselWatchItem;
   steamWatches: SteamWatchItem[];
+  rubRates: Record<string, number>;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
   onUpdatePrice: (id: string, newPrice: number) => void;
   onRemove: (id: string) => void;
@@ -371,9 +414,8 @@ function GgselItemCard({
   const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
   const steamPrice = entry?.price;
   const steamCurrency = entry?.currency || "USD";
-  const needsRate = steamCurrency !== "RUB";
-  const rate = item.exchangeRate || 1;
-  const baseRub = typeof steamPrice === "number" ? (needsRate ? steamPrice * rate : steamPrice) : undefined;
+  const needsRate = usesManualRate(steamCurrency, rubRates);
+  const baseRub = typeof steamPrice === "number" ? convertToRub(steamPrice, steamCurrency, item.exchangeRate, rubRates) : undefined;
   const suggested =
     typeof baseRub === "number"
       ? computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent)
@@ -452,6 +494,15 @@ function GgselItemCard({
           <div className={`text-sm font-mono font-bold ${needsPriceIncrease ? "text-amber-400" : "text-emerald-400"}`}>
             {typeof suggested === "number" ? suggested.toFixed(2) : "—"}
           </div>
+          {steamCurrency !== "RUB" && (
+            <p className="text-[9px] text-gray-600 mt-0.5">
+              {needsRate
+                ? item.exchangeRate
+                  ? `курс вручну: ${item.exchangeRate}`
+                  : "постав курс"
+                : "курс: авто (ЦБ)"}
+            </p>
+          )}
         </div>
       </div>
 

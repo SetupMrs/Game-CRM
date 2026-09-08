@@ -1152,6 +1152,56 @@ if (STEAM_WATCH_AUTO_SYNC_HOURS > 0) {
   console.log("[SteamWatch] Автоматична синхронізація Steam вимкнена (STEAM_WATCH_AUTO_SYNC_HOURS=0).");
 }
 
+// ---------------------------------------------------------------------------
+// Live currency → RUB rates for the ggsel calculator
+// ---------------------------------------------------------------------------
+// Free, no-key public exchange-rate API (updated daily by the provider).
+// USD is deliberately handled separately by the user themselves (their own
+// ggsel exchange rate), but every other currency (EUR, INR, BRL, TRY, ...)
+// converts automatically so they don't have to track 30+ rates by hand.
+let rubRatesCache: { rates: Record<string, number>; fetchedAt: number } | null = null;
+
+async function fetchRubRates(): Promise<Record<string, number> | null> {
+  try {
+    const response = await fetch("https://open.er-api.com/v6/latest/RUB", { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    // data.rates[CUR] = how many CUR you get for 1 RUB — invert to get
+    // "how many RUB is 1 unit of CUR", which is what the calculator needs.
+    if (data?.result !== "success" || !data?.rates || typeof data.rates !== "object") return null;
+    const rubPerUnit: Record<string, number> = {};
+    for (const [code, perRub] of Object.entries(data.rates)) {
+      if (typeof perRub === "number" && perRub > 0) {
+        rubPerUnit[code.toUpperCase()] = 1 / perRub;
+      }
+    }
+    return rubPerUnit;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshRubRates() {
+  const rates = await fetchRubRates();
+  if (rates) {
+    rubRatesCache = { rates, fetchedAt: Date.now() };
+    console.log(`[FX] Курси валют до рубля оновлено (${Object.keys(rates).length} валют).`);
+  } else {
+    console.warn("[FX] Не вдалося оновити курси валют — залишаю попередні дані (якщо є).");
+  }
+}
+
+app.get("/api/steam-watch/rub-rates", requireAuth, (req, res) => {
+  res.json({
+    status: "success",
+    rates: rubRatesCache?.rates || {},
+    fetchedAt: rubRatesCache ? new Date(rubRatesCache.fetchedAt).toISOString() : null
+  });
+});
+
+refreshRubRates();
+setInterval(() => { refreshRubRates(); }, 6 * 60 * 60 * 1000); // раз на 6 годин
+
 // Configure Vite middleware or Static files serving
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
