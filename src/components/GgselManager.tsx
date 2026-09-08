@@ -388,7 +388,7 @@ function GgselItemCard({
 
   return (
     <div
-      className={`border rounded-xl p-4 space-y-3 ${
+      className={`border rounded-xl p-4 space-y-3 max-w-xl ${
         needsPriceIncrease ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"
       }`}
     >
