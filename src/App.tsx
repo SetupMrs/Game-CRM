@@ -1319,6 +1319,54 @@ export default function App() {
     saveStateToDisk(updated);
   };
 
+  // Модалка редагування змінює ціну ГГ ggsel і решту полів (курс, комісії, %)
+  // одночасно. Викликати onUpdatePrice і onUpdateItem окремо (два послідовні
+  // saveStateToDisk на тому самому "db" із замикання) призводило до того, що
+  // другий виклик перезаписував ціну, збережену першим — тому об'єднуємо все
+  // в один запис.
+  const handleUpdateGgselItemFull = (
+    itemId: string,
+    patch: {
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => {
+    const item = (db.ggselItems || []).find(i => i.id === itemId);
+    if (!item) return;
+    const now = new Date().toISOString();
+    let priceHistory = item.ggselPriceHistory || [];
+    let ggselPrice = item.ggselPrice;
+    if (typeof patch.ggselPrice === "number") {
+      if (typeof item.ggselPrice === "number" && item.ggselPrice !== patch.ggselPrice) {
+        priceHistory = [
+          { id: generateId("pricehist"), price: item.ggselPrice, currency: "RUB", changedAt: now },
+          ...priceHistory
+        ].slice(0, 50);
+      }
+      ggselPrice = patch.ggselPrice;
+    }
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i =>
+        i.id === itemId
+          ? {
+              ...i,
+              ggselPrice,
+              ggselPriceHistory: priceHistory,
+              exchangeRate: patch.exchangeRate,
+              commission1Percent: patch.commission1Percent,
+              commission2Percent: patch.commission2Percent,
+              myMarginPercent: patch.myMarginPercent
+            }
+          : i
+      )
+    };
+    saveStateToDisk(updated);
+  };
+
   const handleRemoveGgselItem = (itemId: string) => {
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
@@ -1929,6 +1977,7 @@ export default function App() {
                     onAddItem={handleAddGgselItem}
                     onUpdateItem={handleUpdateGgselItem}
                     onUpdatePrice={handleUpdateGgselPrice}
+                    onSaveItemDetails={handleUpdateGgselItemFull}
                     onRemoveItem={handleRemoveGgselItem}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />

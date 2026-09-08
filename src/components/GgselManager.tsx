@@ -23,6 +23,16 @@ interface GgselManagerProps {
   onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
   onUpdatePrice: (id: string, newPrice: number) => void;
+  onSaveItemDetails: (
+    id: string,
+    patch: {
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => void;
   onRemoveItem: (id: string) => void;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
@@ -71,6 +81,7 @@ export default function GgselManager({
   onAddItem,
   onUpdateItem,
   onUpdatePrice,
+  onSaveItemDetails,
   onRemoveItem,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
@@ -221,7 +232,7 @@ export default function GgselManager({
                   steamWatches={steamWatches}
                   rubRates={rubRates}
                   onUpdateItem={onUpdateItem}
-                  onUpdatePrice={onUpdatePrice}
+                  onSaveItemDetails={onSaveItemDetails}
                   onRemove={onRemoveItem}
                 />
               ))}
@@ -397,7 +408,7 @@ function GgselItemCard({
   steamWatches,
   rubRates,
   onUpdateItem,
-  onUpdatePrice,
+  onSaveItemDetails,
   onRemove
 }: {
   key?: React.Key;
@@ -405,7 +416,16 @@ function GgselItemCard({
   steamWatches: SteamWatchItem[];
   rubRates: Record<string, number>;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
-  onUpdatePrice: (id: string, newPrice: number) => void;
+  onSaveItemDetails: (
+    id: string,
+    patch: {
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => void;
   onRemove: (id: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
@@ -511,8 +531,7 @@ function GgselItemCard({
           item={item}
           needsRate={needsRate}
           steamCurrency={steamCurrency}
-          onUpdateItem={onUpdateItem}
-          onUpdatePrice={onUpdatePrice}
+          onSaveItemDetails={onSaveItemDetails}
           onClose={() => setIsEditing(false)}
         />
       )}
@@ -526,15 +545,22 @@ function EditGgselItemModal({
   item,
   needsRate,
   steamCurrency,
-  onUpdateItem,
-  onUpdatePrice,
+  onSaveItemDetails,
   onClose
 }: {
   item: GgselWatchItem;
   needsRate: boolean;
   steamCurrency: string;
-  onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
-  onUpdatePrice: (id: string, newPrice: number) => void;
+  onSaveItemDetails: (
+    id: string,
+    patch: {
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => void;
   onClose: () => void;
 }) {
   const [priceInput, setPriceInput] = useState(item.ggselPrice != null ? String(item.ggselPrice) : "");
@@ -545,8 +571,8 @@ function EditGgselItemModal({
 
   const handleSave = () => {
     const priceNum = parseFloat(priceInput.replace(",", "."));
-    if (!isNaN(priceNum)) onUpdatePrice(item.id, priceNum);
-    onUpdateItem(item.id, {
+    onSaveItemDetails(item.id, {
+      ggselPrice: !isNaN(priceNum) ? priceNum : undefined,
       exchangeRate: rateInput ? parseFloat(rateInput.replace(",", ".")) || undefined : undefined,
       commission1Percent: parseFloat(c1Input.replace(",", ".")) || 0,
       commission2Percent: parseFloat(c2Input.replace(",", ".")) || 0,
