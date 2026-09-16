@@ -10,7 +10,6 @@ import {
   Wallet,
   Truck,
   Package,
-  Laptop,
   CheckCircle,
   LogOut,
   Trash2,
@@ -38,7 +37,6 @@ const SupplierManager = lazy(() => import("./components/SupplierManager"));
 const PricesManager = lazy(() => import("./components/PricesManager"));
 const GgselManager = lazy(() => import("./components/GgselManager"));
 
-const LOCAL_CACHE_KEY = "game_crm_srm_db_cache";
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
 const LAST_NOTIFIED_DATE_KEY = "game_crm_last_notified_date";
 const SEEN_PRICE_ALERTS_KEY = "game_crm_seen_price_alerts";
@@ -178,7 +176,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices" | "ggsel">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
   const [serverError, setServerError] = useState<string | null>(null);
-  const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   // List of real accounts, used to populate "assign to..." pickers (task
@@ -424,22 +421,7 @@ export default function App() {
     }
   }, [backupFeedback]);
 
-  // Best-effort local cache write. Used purely as an offline fallback when the
-  // server is unreachable — the server file is always the source of truth.
-  const writeLocalCache = (data: DatabaseState) => {
-    try {
-      localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(data));
-    } catch (e: any) {
-      // Most likely a QuotaExceededError from large embedded images/voice notes.
-      console.error("Failed to write offline cache to localStorage:", e);
-      setBackupFeedback({
-        type: "error",
-        message: e?.name === "QuotaExceededError"
-          ? "Не вистачає місця у пам'яті браузера для офлайн-копії. Дані на сервері збережено, але офлайн-кеш не оновлено."
-          : "Не вдалося оновити офлайн-кеш у браузері."
-      });
-    }
-  };
+  // Server is the single source of truth — no local browser cache anymore.
 
   // Server is the single source of truth (important once this app is shared
   // across devices / deployed on a real server). LocalStorage is only an
@@ -469,27 +451,8 @@ export default function App() {
       }
 
       setDb(finalData);
-      setIsOfflineMode(false);
-      writeLocalCache(finalData);
     } catch (error: any) {
-      console.error("Server database load failed, falling back to offline cache:", error);
-      const localDataStr = localStorage.getItem(LOCAL_CACHE_KEY);
-      if (localDataStr) {
-        try {
-          const localData = JSON.parse(localDataStr);
-          setDb(normalizeDb(localData));
-          setIsOfflineMode(true);
-          setBackupFeedback({
-            type: "error",
-            message: "Сервер недоступний. Показано останню збережену офлайн-копію (лише для читання, зміни не будуть синхронізовані)."
-          });
-          setServerError(null);
-          setIsLoading(false);
-          return;
-        } catch (e) {
-          console.error("Local cache parse failed:", e);
-        }
-      }
+      console.error("Server database load failed:", error);
       setServerError("Не вдалося з'єднатися із сервером. Перевірте, чи запущений сервер, та спробуйте ще раз.");
     } finally {
       setIsLoading(false);
@@ -530,19 +493,9 @@ export default function App() {
     setAppUser(null);
   };
 
-  // Universal State Update & Disk Save (server first, local cache as backup)
+  // Universal State Update & Disk Save (server is the single source of truth)
   const saveStateToDisk = async (updatedDb: DatabaseState): Promise<boolean> => {
     setDb(updatedDb);
-
-    if (isOfflineMode) {
-      // Don't silently pretend changes were saved while disconnected from the server.
-      writeLocalCache(updatedDb);
-      setBackupFeedback({
-        type: "error",
-        message: "Офлайн-режим: зміну збережено лише локально. Підключіться до сервера, щоб синхронізувати."
-      });
-      return false;
-    }
 
     try {
       const res = await apiFetch("/api/db", {
@@ -555,7 +508,6 @@ export default function App() {
         try { serverMessage = (await res.json())?.message || ""; } catch { /* ignore */ }
         throw new Error(serverMessage || "Помилка збереження змін на диск.");
       }
-      writeLocalCache(updatedDb);
       return true;
     } catch (error: any) {
       console.error("Server persist failed:", error);
@@ -1537,26 +1489,12 @@ export default function App() {
 
           {/* Quick Connection Status Info */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs font-semibold">
-            {/* Offline cache indicator */}
-            <div
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${
-                isOfflineMode
-                  ? "text-amber-400 bg-amber-500/10 border-amber-500/20"
-                  : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-              }`}
-              title={isOfflineMode ? "Показано офлайн-копію з браузера, зміни не синхронізуються" : "Дані синхронізовано з сервером"}
-            >
-              <Laptop className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Кеш: </span>
-              <span className="font-mono">{isOfflineMode ? "ОФЛАЙН" : "OK"}</span>
-            </div>
-
             {/* Real server connection status */}
             <div className="hidden sm:flex items-center gap-1.5 text-gray-300 bg-[#1A1A1C] px-2.5 py-1.5 rounded-lg border border-white/5">
-              <Database className={`w-3.5 h-3.5 ${serverError || isOfflineMode ? "text-red-400" : "text-emerald-400"}`} />
+              <Database className={`w-3.5 h-3.5 ${serverError ? "text-red-400" : "text-emerald-400"}`} />
               <span>Сервер: </span>
-              <span className={`font-mono ${serverError || isOfflineMode ? "text-red-400" : "text-emerald-500"}`}>
-                {serverError || isOfflineMode ? "НЕДОСТУПНИЙ" : "OK"}
+              <span className={`font-mono ${serverError ? "text-red-400" : "text-emerald-500"}`}>
+                {serverError ? "НЕДОСТУПНИЙ" : "OK"}
               </span>
             </div>
 
@@ -1994,11 +1932,7 @@ export default function App() {
         <div className="w-full px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-3 text-xs">
           <p>© 2026 Game CRM. Дані зберігаються на сервері (SQLite).</p>
           <div className="flex gap-4">
-            {isOfflineMode ? (
-              <span className="font-semibold text-amber-400">Офлайн-режим — показано локальний кеш, зміни не синхронізуються</span>
-            ) : (
-              <span className="font-semibold text-emerald-400">Підключено до сервера</span>
-            )}
+            <span className="font-semibold text-emerald-400">Підключено до сервера</span>
           </div>
         </div>
       </footer>
