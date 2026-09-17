@@ -338,6 +338,13 @@ function AddGgselItemPanel({
         </>
       ) : (
         <>
+          {watch?.headerImage && (
+            <img
+              src={watch.headerImage}
+              alt=""
+              className="w-full max-w-[240px] h-auto rounded-lg border border-white/10"
+            />
+          )}
           <div>
             <label className={labelClass}>Назва товару</label>
             <input value={title} onChange={e => setTitle(e.target.value)} className={inputClass} />
@@ -455,6 +462,13 @@ function GgselItemCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2">
+        {watch?.headerImage && (
+          <img
+            src={watch.headerImage}
+            alt=""
+            className="w-16 h-8 sm:w-20 sm:h-9 object-cover rounded-md border border-white/10 shrink-0"
+          />
+        )}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-white truncate">{item.title}</p>
           <div className="flex items-center gap-2 flex-wrap mt-0.5">
