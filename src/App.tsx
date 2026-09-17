@@ -484,6 +484,21 @@ export default function App() {
     if (isAuthenticated) {
       loadDatabase();
       listBasicUsers().then(setAssignableUsers);
+
+      // Prefetch every tab's code chunk in the background once we're logged
+      // in, so switching tabs later feels instant instead of showing
+      // "Завантаження модуля..." the first time each one is opened. This
+      // runs after the critical data request above, so it never competes
+      // with the initial page load for bandwidth.
+      const idle = (window as any).requestIdleCallback || ((cb: () => void) => setTimeout(cb, 300));
+      idle(() => {
+        import("./components/Dashboard");
+        import("./components/TaskManager");
+        import("./components/FinanceManager");
+        import("./components/SupplierManager");
+        import("./components/PricesManager");
+        import("./components/GgselManager");
+      });
     }
   }, [isAuthenticated]);
 
