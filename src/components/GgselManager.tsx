@@ -342,7 +342,7 @@ export default function GgselManager({
           {categoryItems.length === 0 && !showAddItem ? (
             <p className="text-xs text-gray-500 py-6 text-center">Ще немає товарів у цій категорії.</p>
           ) : (
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
               {categoryItems.map(item => (
                 <GgselItemCard
                   key={item.id}
@@ -862,7 +862,7 @@ function GgselItemCard({
 
   return (
     <div
-      className={`border rounded-xl p-4 space-y-3 max-w-xl ${
+      className={`border rounded-xl p-4 space-y-3 h-full ${
         needsPriceIncrease ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"
       }`}
     >
