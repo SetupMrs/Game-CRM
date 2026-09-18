@@ -18,7 +18,8 @@ interface GgselManagerProps {
   categories: GgselCategory[];
   items: GgselWatchItem[];
   steamWatches: SteamWatchItem[];
-  onAddCategory: (name: string) => void;
+  onAddCategory: (name: string, defaultUsdToRubRate?: number) => void;
+  onUpdateCategoryRate: (id: string, defaultUsdToRubRate: number | undefined) => void;
   onRemoveCategory: (id: string) => void;
   onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
@@ -90,6 +91,7 @@ export default function GgselManager({
   items,
   steamWatches,
   onAddCategory,
+  onUpdateCategoryRate,
   onRemoveCategory,
   onAddItem,
   onUpdateItem,
@@ -124,11 +126,17 @@ export default function GgselManager({
   }, [categories, selectedCategoryId]);
 
   const categoryItems = items.filter(i => i.categoryId === selectedCategoryId);
+  const selectedCategory = categories.find(c => c.id === selectedCategoryId) || null;
+  const [newCategoryRate, setNewCategoryRate] = useState("");
+  const [isEditingCategoryRate, setIsEditingCategoryRate] = useState(false);
+  const [categoryRateInput, setCategoryRateInput] = useState("");
 
   const handleAddCategorySubmit = () => {
     if (!newCategoryName.trim()) return;
-    onAddCategory(newCategoryName.trim());
+    const rate = newCategoryRate ? parseFloat(newCategoryRate.replace(",", ".")) : undefined;
+    onAddCategory(newCategoryName.trim(), rate && !isNaN(rate) ? rate : undefined);
     setNewCategoryName("");
+    setNewCategoryRate("");
     setShowAddCategory(false);
   };
 
@@ -142,6 +150,18 @@ export default function GgselManager({
     if (window.confirm(msg)) {
       onRemoveCategory(selectedCategoryId);
     }
+  };
+
+  const openCategoryRateEditor = () => {
+    setCategoryRateInput(selectedCategory?.defaultUsdToRubRate != null ? String(selectedCategory.defaultUsdToRubRate) : "");
+    setIsEditingCategoryRate(true);
+  };
+
+  const saveCategoryRate = () => {
+    if (!selectedCategoryId) return;
+    const rate = categoryRateInput ? parseFloat(categoryRateInput.replace(",", ".")) : undefined;
+    onUpdateCategoryRate(selectedCategoryId, rate && !isNaN(rate) ? rate : undefined);
+    setIsEditingCategoryRate(false);
   };
 
   return (
@@ -172,10 +192,22 @@ export default function GgselManager({
                 if (e.key === "Escape") {
                   setShowAddCategory(false);
                   setNewCategoryName("");
+                  setNewCategoryRate("");
                 }
               }}
               placeholder="Назва категорії"
               className="bg-[#111112] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-600/50 w-36"
+            />
+            <input
+              value={newCategoryRate}
+              onChange={e => setNewCategoryRate(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") handleAddCategorySubmit();
+              }}
+              placeholder="Курс $→₽ (необов'язково)"
+              inputMode="decimal"
+              title="Спільний курс долара до рубля для всіх товарів цієї категорії — щоб не вводити на кожному товарі окремо. Можна задати або змінити пізніше."
+              className="bg-[#111112] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-600/50 w-40"
             />
             <button onClick={handleAddCategorySubmit} className="p-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg cursor-pointer">
               <Check className="w-3.5 h-3.5 text-white" />
@@ -184,6 +216,7 @@ export default function GgselManager({
               onClick={() => {
                 setShowAddCategory(false);
                 setNewCategoryName("");
+                setNewCategoryRate("");
               }}
               className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer"
             >
@@ -207,7 +240,43 @@ export default function GgselManager({
       ) : (
         <>
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <p className="text-xs text-gray-500">{categoryItems.length} товар(ів) у категорії</p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <p className="text-xs text-gray-500">{categoryItems.length} товар(ів) у категорії</p>
+              {isEditingCategoryRate ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-gray-500">Курс $→₽:</span>
+                  <input
+                    autoFocus
+                    value={categoryRateInput}
+                    onChange={e => setCategoryRateInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") saveCategoryRate();
+                      if (e.key === "Escape") setIsEditingCategoryRate(false);
+                    }}
+                    placeholder="напр. 95"
+                    inputMode="decimal"
+                    className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white w-20 focus:outline-none focus:border-emerald-600/50"
+                  />
+                  <button onClick={saveCategoryRate} className="p-1 bg-emerald-600 hover:bg-emerald-500 rounded cursor-pointer">
+                    <Check className="w-3 h-3 text-white" />
+                  </button>
+                  <button onClick={() => setIsEditingCategoryRate(false)} className="p-1 hover:bg-white/5 rounded cursor-pointer">
+                    <X className="w-3 h-3 text-gray-400" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={openCategoryRateEditor}
+                  className="text-[11px] text-gray-500 hover:text-white flex items-center gap-1 cursor-pointer"
+                  title="Спільний курс долара до рубля для всіх товарів цієї категорії"
+                >
+                  <Pencil className="w-3 h-3" />
+                  {selectedCategory?.defaultUsdToRubRate
+                    ? `Курс категорії: $1 = ${selectedCategory.defaultUsdToRubRate} ₽`
+                    : "Задати курс $→₽ для категорії"}
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               <button
                 onClick={handleRemoveCategory}
@@ -228,6 +297,7 @@ export default function GgselManager({
             <AddGgselItemPanel
               categoryId={selectedCategoryId}
               rubRates={rubRates}
+              categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
               onLookupOrAddSteamWatch={onLookupOrAddSteamWatch}
               onAddItem={onAddItem}
               onClose={() => setShowAddItem(false)}
@@ -244,6 +314,7 @@ export default function GgselManager({
                   item={item}
                   steamWatches={steamWatches}
                   rubRates={rubRates}
+                  categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
                   onUpdateItem={onUpdateItem}
                   onSaveItemDetails={onSaveItemDetails}
                   onRemove={onRemoveItem}
@@ -262,12 +333,14 @@ export default function GgselManager({
 function AddGgselItemPanel({
   categoryId,
   rubRates,
+  categoryDefaultRate,
   onLookupOrAddSteamWatch,
   onAddItem,
   onClose
 }: {
   categoryId: string;
   rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
   onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
   onClose: () => void;
@@ -383,10 +456,13 @@ function AddGgselItemPanel({
                 <input
                   value={exchangeRate}
                   onChange={e => setExchangeRate(e.target.value)}
-                  placeholder="напр. 95"
+                  placeholder={categoryDefaultRate ? `курс категорії: ${categoryDefaultRate}` : "напр. 95"}
                   inputMode="decimal"
                   className={inputClass}
                 />
+                {categoryDefaultRate && (
+                  <p className="text-[9px] text-gray-600 mt-0.5">Лишиш порожнім — візьме курс категорії ({categoryDefaultRate})</p>
+                )}
               </div>
             )}
             <div>
@@ -427,6 +503,7 @@ function GgselItemCard({
   item,
   steamWatches,
   rubRates,
+  categoryDefaultRate,
   onUpdateItem,
   onSaveItemDetails,
   onRemove
@@ -435,6 +512,7 @@ function GgselItemCard({
   item: GgselWatchItem;
   steamWatches: SteamWatchItem[];
   rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
   onSaveItemDetails: (
     id: string,
@@ -455,7 +533,8 @@ function GgselItemCard({
   const steamPrice = entry?.price;
   const steamCurrency = entry?.currency || "USD";
   const needsRate = usesManualRate(steamCurrency, rubRates);
-  const baseRub = typeof steamPrice === "number" ? convertToRub(steamPrice, steamCurrency, item.exchangeRate, rubRates) : undefined;
+  const effectiveRate = item.exchangeRate ?? categoryDefaultRate;
+  const baseRub = typeof steamPrice === "number" ? convertToRub(steamPrice, steamCurrency, effectiveRate, rubRates) : undefined;
   const suggested =
     typeof baseRub === "number"
       ? computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent)
@@ -546,7 +625,9 @@ function GgselItemCard({
               {needsRate
                 ? item.exchangeRate
                   ? `курс вручну: ${item.exchangeRate}`
-                  : "постав курс"
+                  : categoryDefaultRate
+                    ? `курс категорії: ${categoryDefaultRate}`
+                    : "постав курс"
                 : "курс: авто (ЦБ)"}
             </p>
           )}
@@ -558,6 +639,7 @@ function GgselItemCard({
           item={item}
           needsRate={needsRate}
           steamCurrency={steamCurrency}
+          categoryDefaultRate={categoryDefaultRate}
           onSaveItemDetails={onSaveItemDetails}
           onClose={() => setIsEditing(false)}
         />
@@ -572,12 +654,14 @@ function EditGgselItemModal({
   item,
   needsRate,
   steamCurrency,
+  categoryDefaultRate,
   onSaveItemDetails,
   onClose
 }: {
   item: GgselWatchItem;
   needsRate: boolean;
   steamCurrency: string;
+  categoryDefaultRate?: number;
   onSaveItemDetails: (
     id: string,
     patch: {
@@ -635,7 +719,16 @@ function EditGgselItemModal({
         {needsRate && (
           <div>
             <label className={labelClass}>Курс {steamCurrency} → ₽</label>
-            <input value={rateInput} onChange={e => setRateInput(e.target.value)} placeholder="напр. 95" inputMode="decimal" className={inputClass} />
+            <input
+              value={rateInput}
+              onChange={e => setRateInput(e.target.value)}
+              placeholder={categoryDefaultRate ? `курс категорії: ${categoryDefaultRate}` : "напр. 95"}
+              inputMode="decimal"
+              className={inputClass}
+            />
+            {categoryDefaultRate && (
+              <p className="text-[9px] text-gray-600 mt-0.5">Лишиш порожнім — візьме курс категорії ({categoryDefaultRate})</p>
+            )}
           </div>
         )}
 

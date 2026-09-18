@@ -220,6 +220,7 @@ export interface GgselCategory {
   id: string;
   name: string;
   createdAt: string; // ISO
+  defaultUsdToRubRate?: number; // спільний курс USD→₽ для всіх товарів цієї категорії (можна перекрити на конкретному товарі)
 }
 
 export interface GgselWatchItem {

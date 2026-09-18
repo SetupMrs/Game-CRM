@@ -1233,12 +1233,25 @@ export default function App() {
 
   // --- Калькулятор цін ggsel -------------------------------------------------
 
-  const handleAddGgselCategory = (name: string) => {
+  const handleAddGgselCategory = (name: string, defaultUsdToRubRate?: number) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const newCat: GgselCategory = { id: generateId("ggselcat"), name: trimmed, createdAt: new Date().toISOString() };
+    const newCat: GgselCategory = {
+      id: generateId("ggselcat"),
+      name: trimmed,
+      createdAt: new Date().toISOString(),
+      defaultUsdToRubRate
+    };
     const updated = { ...db, ggselCategories: [...(db.ggselCategories || []), newCat] };
     saveStateToDisk(withLog(updated, "Додав категорію ggsel", "product", trimmed));
+  };
+
+  const handleUpdateGgselCategoryRate = (categoryId: string, defaultUsdToRubRate: number | undefined) => {
+    const updated = {
+      ...db,
+      ggselCategories: (db.ggselCategories || []).map(c => (c.id === categoryId ? { ...c, defaultUsdToRubRate } : c))
+    };
+    saveStateToDisk(updated);
   };
 
   const handleRemoveGgselCategory = (categoryId: string) => {
@@ -1926,6 +1939,7 @@ export default function App() {
                     items={db.ggselItems || []}
                     steamWatches={db.steamWatches || []}
                     onAddCategory={handleAddGgselCategory}
+                    onUpdateCategoryRate={handleUpdateGgselCategoryRate}
                     onRemoveCategory={handleRemoveGgselCategory}
                     onAddItem={handleAddGgselItem}
                     onUpdateItem={handleUpdateGgselItem}
