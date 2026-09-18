@@ -279,17 +279,28 @@ export default function App() {
   const ggselNeedsIncreaseCount = useMemo(() => {
     let count = 0;
     (db.ggselItems || []).forEach(item => {
-      const watch = (db.steamWatches || []).find(w => w.packageId === item.steamPackageId);
-      const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
-      const steamPrice = entry?.price;
-      if (typeof steamPrice !== "number" || typeof item.ggselPrice !== "number") return;
-      const currency = entry?.currency || "USD";
-      const baseRub = currency !== "RUB" ? steamPrice * (item.exchangeRate || 1) : steamPrice;
+      if (item.isPaused) return;
+      let price: number | undefined;
+      let currency = "USD";
+      if (item.sourceType === "catalog") {
+        const supplier = (db.suppliers || []).find(s => s.id === item.catalogSupplierId && !s.deletedAt);
+        const product = supplier?.products.find(p => p.id === item.catalogProductId && !p.deletedAt);
+        const nominal = product?.items?.find(i => i.id === item.catalogItemId);
+        price = nominal?.price;
+        currency = nominal?.currency || product?.currency || "USD";
+      } else {
+        const watch = (db.steamWatches || []).find(w => w.packageId === item.steamPackageId);
+        const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
+        price = entry?.price;
+        currency = entry?.currency || "USD";
+      }
+      if (typeof price !== "number" || typeof item.ggselPrice !== "number") return;
+      const baseRub = currency !== "RUB" ? price * (item.exchangeRate || 1) : price;
       const suggested = computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent);
       if (suggested - item.ggselPrice > 1) count++;
     });
     return count;
-  }, [db.ggselItems, db.steamWatches]);
+  }, [db.ggselItems, db.steamWatches, db.suppliers]);
 
   const markPriceAlertSeen = (id: string) => {
     setSeenPriceAlertIds(prev => {
@@ -1368,6 +1379,17 @@ export default function App() {
     saveStateToDisk(withLog(updated, "Видалив товар з ggsel", "product", item.title));
   };
 
+  const handleToggleGgselItemPaused = (itemId: string) => {
+    const item = (db.ggselItems || []).find(i => i.id === itemId);
+    if (!item) return;
+    const nowPaused = !item.isPaused;
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i => (i.id === itemId ? { ...i, isPaused: nowPaused } : i))
+    };
+    saveStateToDisk(withLog(updated, nowPaused ? "Призупинив товар у ggsel" : "Відновив товар у ggsel", "product", item.title));
+  };
+
   const handleToggleProductAdded = (supId: string, prodId: string) => {
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const targetProd = supplier?.products?.find(p => p.id === prodId);
@@ -1962,6 +1984,7 @@ export default function App() {
                     onUpdatePrice={handleUpdateGgselPrice}
                     onSaveItemDetails={handleUpdateGgselItemFull}
                     onRemoveItem={handleRemoveGgselItem}
+                    onTogglePaused={handleToggleGgselItemPaused}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />
                 )}

@@ -241,6 +241,7 @@ export interface GgselWatchItem {
   commission1Percent: number; // перший % комісії ggsel
   commission2Percent: number; // другий % комісії ggsel
   myMarginPercent: number; // бажаний % прибутку
+  isPaused?: boolean; // призупинено (напр. номінал закінчився) — прибрано зі спостереження, але не видалено
   addedAt: string; // ISO
 }
 

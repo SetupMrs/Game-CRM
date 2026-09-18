@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry, Supplier, ProductCard, CategoryItem } from "../types";
 import { computeGgselSuggestedPrice } from "../utils";
 import { apiFetch } from "../apiClient";
-import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package } from "lucide-react";
+import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package, Pause, Play } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
   ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
@@ -38,6 +38,7 @@ interface GgselManagerProps {
     }
   ) => void;
   onRemoveItem: (id: string) => void;
+  onTogglePaused: (id: string) => void;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
 
@@ -132,12 +133,14 @@ export default function GgselManager({
   onUpdatePrice,
   onSaveItemDetails,
   onRemoveItem,
+  onTogglePaused,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(categories[0]?.id || null);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showPaused, setShowPaused] = useState(false);
   const [rubRates, setRubRates] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -159,7 +162,10 @@ export default function GgselManager({
     }
   }, [categories, selectedCategoryId]);
 
-  const categoryItems = items.filter(i => i.categoryId === selectedCategoryId);
+  const allCategoryItems = items.filter(i => i.categoryId === selectedCategoryId);
+  const pausedCategoryItems = allCategoryItems.filter(i => i.isPaused);
+  const activeCategoryItems = allCategoryItems.filter(i => !i.isPaused);
+  const categoryItems = showPaused ? pausedCategoryItems : activeCategoryItems;
   const selectedCategory = categories.find(c => c.id === selectedCategoryId) || null;
   const [newCategoryRate, setNewCategoryRate] = useState("");
   const [isEditingCategoryRate, setIsEditingCategoryRate] = useState(false);
@@ -204,7 +210,10 @@ export default function GgselManager({
         {categories.map(cat => (
           <button
             key={cat.id}
-            onClick={() => setSelectedCategoryId(cat.id)}
+            onClick={() => {
+              setSelectedCategoryId(cat.id);
+              setShowPaused(false);
+            }}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
               selectedCategoryId === cat.id
                 ? "bg-emerald-600 text-white"
@@ -275,7 +284,24 @@ export default function GgselManager({
         <>
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3 flex-wrap">
-              <p className="text-xs text-gray-500">{categoryItems.length} товар(ів) у категорії</p>
+              <div className="flex items-center gap-1 bg-white/5 rounded-lg p-0.5">
+                <button
+                  onClick={() => setShowPaused(false)}
+                  className={`text-xs px-2.5 py-1 rounded-md cursor-pointer font-semibold transition-colors ${
+                    !showPaused ? "bg-emerald-600 text-white" : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Активні ({activeCategoryItems.length})
+                </button>
+                <button
+                  onClick={() => setShowPaused(true)}
+                  className={`text-xs px-2.5 py-1 rounded-md cursor-pointer font-semibold transition-colors ${
+                    showPaused ? "bg-amber-600 text-white" : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Призупинені ({pausedCategoryItems.length})
+                </button>
+              </div>
               {isEditingCategoryRate ? (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] text-gray-500">Курс $→₽:</span>
@@ -341,7 +367,9 @@ export default function GgselManager({
           )}
 
           {categoryItems.length === 0 && !showAddItem ? (
-            <p className="text-xs text-gray-500 py-6 text-center">Ще немає товарів у цій категорії.</p>
+            <p className="text-xs text-gray-500 py-6 text-center">
+              {showPaused ? "Немає призупинених товарів." : "Ще немає товарів у цій категорії."}
+            </p>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
               {categoryItems.map(item => (
@@ -355,6 +383,7 @@ export default function GgselManager({
                   onUpdateItem={onUpdateItem}
                   onSaveItemDetails={onSaveItemDetails}
                   onRemove={onRemoveItem}
+                  onTogglePaused={onTogglePaused}
                 />
               ))}
             </div>
@@ -823,7 +852,8 @@ function GgselItemCard({
   categoryDefaultRate,
   onUpdateItem,
   onSaveItemDetails,
-  onRemove
+  onRemove,
+  onTogglePaused
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -844,6 +874,7 @@ function GgselItemCard({
     }
   ) => void;
   onRemove: (id: string) => void;
+  onTogglePaused: (id: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const isCatalog = item.sourceType === "catalog";
@@ -869,8 +900,8 @@ function GgselItemCard({
 
   return (
     <div
-      className={`border rounded-xl p-4 space-y-3 h-full ${
-        needsPriceIncrease ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"
+      className={`border rounded-xl p-4 space-y-3 h-full ${item.isPaused ? "opacity-60" : ""} ${
+        needsPriceIncrease && !item.isPaused ? "border-amber-500/30 bg-amber-500/5" : "border-white/5 bg-[#111112]"
       }`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -882,7 +913,14 @@ function GgselItemCard({
           />
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-white truncate">{item.title}</p>
+          <p className="text-sm font-bold text-white truncate">
+            {item.title}
+            {item.isPaused && (
+              <span className="ml-2 text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-sm px-1.5 py-0.5 align-middle">
+                Призупинено
+              </span>
+            )}
+          </p>
           <div className="flex items-center gap-2 flex-wrap mt-0.5">
             {isCatalog ? (
               <span className="text-[11px] text-gray-500 flex items-center gap-1">
@@ -911,6 +949,13 @@ function GgselItemCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => onTogglePaused(item.id)}
+            className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer"
+            title={item.isPaused ? "Відновити спостереження" : "Призупинити (напр. номінал закінчився)"}
+          >
+            {item.isPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5 text-gray-500" />}
+          </button>
           <button onClick={() => setIsEditing(true)} className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer" title="Редагувати">
             <Pencil className="w-3.5 h-3.5 text-gray-500" />
           </button>
@@ -920,7 +965,7 @@ function GgselItemCard({
         </div>
       </div>
 
-      {needsPriceIncrease && typeof suggested === "number" && (
+      {needsPriceIncrease && !item.isPaused && typeof suggested === "number" && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
           <p className="text-xs text-amber-300">
