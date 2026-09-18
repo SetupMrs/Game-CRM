@@ -1271,6 +1271,18 @@ export default function App() {
     saveStateToDisk(withLog(updated, "Додав товар у ggsel", "product", newItem.title));
   };
 
+  // Додає одразу кілька номіналів (наприклад, з власного каталогу) ОДНИМ
+  // запитом — так само, як у виправленні з модалкою редагування, кілька
+  // послідовних saveStateToDisk на тому самому "db" із замикання призвели б
+  // до втрати частини доданих товарів.
+  const handleAddGgselItems = (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => {
+    if (items.length === 0) return;
+    const now = new Date().toISOString();
+    const newItems: GgselWatchItem[] = items.map(item => ({ ...item, id: generateId("ggselitem"), addedAt: now }));
+    const updated = { ...db, ggselItems: [...newItems, ...(db.ggselItems || [])] };
+    saveStateToDisk(withLog(updated, `Додав товари у ggsel (${newItems.length})`, "product", newItems.map(i => i.title).join(", ")));
+  };
+
   const handleUpdateGgselItem = (itemId: string, patch: Partial<GgselWatchItem>) => {
     const updated = {
       ...db,
@@ -1938,10 +1950,12 @@ export default function App() {
                     categories={db.ggselCategories || []}
                     items={db.ggselItems || []}
                     steamWatches={db.steamWatches || []}
+                    suppliers={visibleSuppliers}
                     onAddCategory={handleAddGgselCategory}
                     onUpdateCategoryRate={handleUpdateGgselCategoryRate}
                     onRemoveCategory={handleRemoveGgselCategory}
                     onAddItem={handleAddGgselItem}
+                    onAddItems={handleAddGgselItems}
                     onUpdateItem={handleUpdateGgselItem}
                     onUpdatePrice={handleUpdateGgselPrice}
                     onSaveItemDetails={handleUpdateGgselItemFull}

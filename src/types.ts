@@ -227,9 +227,15 @@ export interface GgselWatchItem {
   id: string;
   categoryId: string;
   title: string;
-  steamPackageId: string; // посилання на SteamWatchItem.packageId
-  steamCountryCode: string; // яку саме "країну" ціни Steam use (SteamPriceEntry.countryCode)
-  exchangeRate?: number; // скільки рублів за 1 одиницю валюти Steam-ціни; не потрібен, якщо валюта вже RUB
+  sourceType?: "steam" | "catalog"; // відсутнє поле = "steam" (для товарів, доданих до цієї фічі)
+  // Джерело "steam"
+  steamPackageId?: string; // посилання на SteamWatchItem.packageId
+  steamCountryCode?: string; // яку саме "країну" ціни Steam використовувати (SteamPriceEntry.countryCode)
+  // Джерело "catalog" — власний каталог товарів (LetsKeys), розділ "Товари"
+  catalogSupplierId?: string;
+  catalogProductId?: string;
+  catalogItemId?: string; // конкретний номінал (CategoryItem.id) усередині товару
+  exchangeRate?: number; // скільки рублів за 1 одиницю валюти ціни; не потрібен, якщо валюта вже RUB
   ggselPrice?: number; // ціна, яку користувач вручну виставив на ggsel (RUB)
   ggselPriceHistory?: PriceHistoryEntry[]; // історія власних правок ціни на ggsel
   commission1Percent: number; // перший % комісії ggsel

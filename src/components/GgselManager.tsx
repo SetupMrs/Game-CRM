@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry } from "../types";
+import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry, Supplier, ProductCard, CategoryItem } from "../types";
 import { computeGgselSuggestedPrice } from "../utils";
 import { apiFetch } from "../apiClient";
-import { Plus, X, Check, Trash2, AlertTriangle, Pencil } from "lucide-react";
+import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
   ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
@@ -18,10 +18,12 @@ interface GgselManagerProps {
   categories: GgselCategory[];
   items: GgselWatchItem[];
   steamWatches: SteamWatchItem[];
+  suppliers: Supplier[];
   onAddCategory: (name: string, defaultUsdToRubRate?: number) => void;
   onUpdateCategoryRate: (id: string, defaultUsdToRubRate: number | undefined) => void;
   onRemoveCategory: (id: string) => void;
   onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
+  onAddItems: (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => void;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
   onUpdatePrice: (id: string, newPrice: number) => void;
   onSaveItemDetails: (
@@ -48,6 +50,35 @@ function steamPriceTrend(current?: number, prevEntry?: PriceHistoryEntry): "up" 
 // USD deliberately stays manual — the person tracks their own ggsel exchange
 // rate for it. Every other currency converts automatically via a live rate
 // when we have one, falling back to a manual override if we don't.
+// Знаходить поточну ціну/валюту/історію товару ggsel незалежно від того, чи
+// він прив'язаний до Steam, чи до власного каталогу (LetsKeys). Це єдина
+// точка правди, звідки картка й розрахунок беруть "живі" дані.
+function resolveGgselPriceSource(
+  item: GgselWatchItem,
+  steamWatches: SteamWatchItem[],
+  suppliers: Supplier[]
+): { price?: number; currency: string; priceHistory?: PriceHistoryEntry[]; label: string } {
+  if (item.sourceType === "catalog") {
+    const supplier = suppliers.find(s => s.id === item.catalogSupplierId);
+    const product = supplier?.products.find(p => p.id === item.catalogProductId);
+    const nominal = product?.items?.find(i => i.id === item.catalogItemId);
+    return {
+      price: nominal?.price,
+      currency: nominal?.currency || product?.currency || "USD",
+      priceHistory: nominal?.priceHistory,
+      label: product ? `${product.title}${supplier ? " · " + supplier.name : ""}` : "Товар видалено з каталогу"
+    };
+  }
+  const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
+  const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
+  return {
+    price: entry?.price,
+    currency: entry?.currency || "USD",
+    priceHistory: entry?.priceHistory,
+    label: watch ? `Steam (${STEAM_COUNTRY_LABELS[item.steamCountryCode || ""] || item.steamCountryCode})` : "Steam"
+  };
+}
+
 function convertToRub(
   price: number,
   currency: string,
@@ -90,10 +121,12 @@ export default function GgselManager({
   categories,
   items,
   steamWatches,
+  suppliers,
   onAddCategory,
   onUpdateCategoryRate,
   onRemoveCategory,
   onAddItem,
+  onAddItems,
   onUpdateItem,
   onUpdatePrice,
   onSaveItemDetails,
@@ -298,8 +331,10 @@ export default function GgselManager({
               categoryId={selectedCategoryId}
               rubRates={rubRates}
               categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
+              suppliers={suppliers}
               onLookupOrAddSteamWatch={onLookupOrAddSteamWatch}
               onAddItem={onAddItem}
+              onAddItems={onAddItems}
               onClose={() => setShowAddItem(false)}
             />
           )}
@@ -313,6 +348,7 @@ export default function GgselManager({
                   key={item.id}
                   item={item}
                   steamWatches={steamWatches}
+                  suppliers={suppliers}
                   rubRates={rubRates}
                   categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
                   onUpdateItem={onUpdateItem}
@@ -331,6 +367,73 @@ export default function GgselManager({
 // --- Add-item flow: look up a Steam package, then configure the calculator ---
 
 function AddGgselItemPanel({
+  categoryId,
+  rubRates,
+  categoryDefaultRate,
+  suppliers,
+  onLookupOrAddSteamWatch,
+  onAddItem,
+  onAddItems,
+  onClose
+}: {
+  categoryId: string;
+  rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
+  suppliers: Supplier[];
+  onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
+  onAddItem: (item: Omit<GgselWatchItem, "id" | "addedAt">) => void;
+  onAddItems: (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => void;
+  onClose: () => void;
+}) {
+  const [sourceMode, setSourceMode] = useState<"steam" | "catalog">("steam");
+
+  return (
+    <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3">
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => setSourceMode("steam")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold ${
+            sourceMode === "steam" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          Steam
+        </button>
+        <button
+          onClick={() => setSourceMode("catalog")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold ${
+            sourceMode === "catalog" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          Наш каталог
+        </button>
+      </div>
+
+      {sourceMode === "steam" ? (
+        <AddSteamItemFlow
+          categoryId={categoryId}
+          rubRates={rubRates}
+          categoryDefaultRate={categoryDefaultRate}
+          onLookupOrAddSteamWatch={onLookupOrAddSteamWatch}
+          onAddItem={onAddItem}
+          onClose={onClose}
+        />
+      ) : (
+        <AddCatalogItemFlow
+          categoryId={categoryId}
+          rubRates={rubRates}
+          categoryDefaultRate={categoryDefaultRate}
+          suppliers={suppliers}
+          onAddItems={onAddItems}
+          onClose={onClose}
+        />
+      )}
+    </div>
+  );
+}
+
+// --- Steam add flow (lookup a package, pick a country, configure) ---------
+
+function AddSteamItemFlow({
   categoryId,
   rubRates,
   categoryDefaultRate,
@@ -382,6 +485,7 @@ function AddGgselItemPanel({
     onAddItem({
       categoryId,
       title: title.trim(),
+      sourceType: "steam",
       steamPackageId: watch.packageId,
       steamCountryCode: countryCode,
       exchangeRate: exchangeRate ? parseFloat(exchangeRate.replace(",", ".")) : undefined,
@@ -394,106 +498,312 @@ function AddGgselItemPanel({
     onClose();
   };
 
-  return (
-    <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3">
-      {step === "lookup" ? (
-        <>
-          <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
-          <input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            placeholder="store.steampowered.com/sub/... або id"
-            className={inputClass}
-            onKeyDown={e => {
-              if (e.key === "Enter") handleLookup();
-            }}
-          />
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <div className="flex gap-2">
-            <button
-              onClick={handleLookup}
-              disabled={busy}
-              className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
-            >
-              {busy ? "Шукаю..." : "Знайти"}
-            </button>
-            <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
-              Скасувати
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          {watch?.headerImage && (
-            <img
-              src={watch.headerImage}
-              alt=""
-              className="w-full max-w-[240px] h-auto rounded-lg border border-white/10"
+  return step === "lookup" ? (
+    <>
+      <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
+      <input
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        placeholder="store.steampowered.com/sub/... або id"
+        className={inputClass}
+        onKeyDown={e => {
+          if (e.key === "Enter") handleLookup();
+        }}
+      />
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={handleLookup}
+          disabled={busy}
+          className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+        >
+          {busy ? "Шукаю..." : "Знайти"}
+        </button>
+        <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
+          Скасувати
+        </button>
+      </div>
+    </>
+  ) : (
+    <>
+      {watch?.headerImage && (
+        <img src={watch.headerImage} alt="" className="w-full max-w-[240px] h-auto rounded-lg border border-white/10" />
+      )}
+      <div>
+        <label className={labelClass}>Назва товару</label>
+        <input value={title} onChange={e => setTitle(e.target.value)} className={inputClass} />
+      </div>
+
+      <div>
+        <label className={labelClass}>Яку ціну Steam відстежувати</label>
+        <select value={countryCode} onChange={e => setCountryCode(e.target.value)} className={inputClass}>
+          {(watch?.prices || [])
+            .filter(p => typeof p.price === "number")
+            .map(p => (
+              <option key={p.countryCode} value={p.countryCode}>
+                {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
+              </option>
+            ))}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {needsRate && (
+          <div>
+            <label className={labelClass}>Курс {selectedEntry?.currency}→₽</label>
+            <input
+              value={exchangeRate}
+              onChange={e => setExchangeRate(e.target.value)}
+              placeholder={categoryDefaultRate ? `курс категорії: ${categoryDefaultRate}` : "напр. 95"}
+              inputMode="decimal"
+              className={inputClass}
             />
+            {categoryDefaultRate && (
+              <p className="text-[9px] text-gray-600 mt-0.5">Лишиш порожнім — візьме курс категорії ({categoryDefaultRate})</p>
+            )}
+          </div>
+        )}
+        <div>
+          <label className={labelClass}>Комісія 1, %</label>
+          <input value={commission1} onChange={e => setCommission1(e.target.value)} inputMode="decimal" className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass}>Комісія 2, %</label>
+          <input value={commission2} onChange={e => setCommission2(e.target.value)} inputMode="decimal" className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass}>Мій %</label>
+          <input value={margin} onChange={e => setMargin(e.target.value)} inputMode="decimal" className={inputClass} />
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleSave}
+          disabled={!countryCode || !title.trim()}
+          className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+        >
+          Зберегти
+        </button>
+        <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
+          Скасувати
+        </button>
+      </div>
+    </>
+  );
+}
+
+// --- Catalog add flow (search our own products, pick one or more nominals) ---
+
+function AddCatalogItemFlow({
+  categoryId,
+  rubRates,
+  categoryDefaultRate,
+  suppliers,
+  onAddItems,
+  onClose
+}: {
+  categoryId: string;
+  rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
+  suppliers: Supplier[];
+  onAddItems: (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<{ supplier: Supplier; product: ProductCard } | null>(null);
+  const [checkedItemIds, setCheckedItemIds] = useState<Set<string>>(new Set());
+  const [commission1, setCommission1] = useState("0");
+  const [commission2, setCommission2] = useState("0");
+  const [margin, setMargin] = useState("0");
+  const [exchangeRate, setExchangeRate] = useState("");
+
+  const matches = (() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const results: { supplier: Supplier; product: ProductCard }[] = [];
+    for (const supplier of suppliers) {
+      if (supplier.deletedAt) continue;
+      for (const product of supplier.products || []) {
+        if (product.deletedAt) continue;
+        if (product.title.toLowerCase().includes(q)) {
+          results.push({ supplier, product });
+          if (results.length >= 20) return results;
+        }
+      }
+    }
+    return results;
+  })();
+
+  const nominals = selectedProduct?.product.items || [];
+  const toggleItem = (id: string) => {
+    setCheckedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Показує "потрібен курс?" по першому позначеному номіналу — достатньо як
+  // орієнтир, бо зазвичай усі номінали товару в одній валюті.
+  const sampleNominal = nominals.find(n => checkedItemIds.has(n.id)) || nominals[0];
+  const needsRate = Boolean(sampleNominal) && usesManualRate(sampleNominal!.currency || selectedProduct?.product.currency || "USD", rubRates);
+  const sampleCurrency = sampleNominal?.currency || selectedProduct?.product.currency || "USD";
+
+  const handleAdd = () => {
+    if (!selectedProduct || checkedItemIds.size === 0) return;
+    const rate = exchangeRate ? parseFloat(exchangeRate.replace(",", ".")) : undefined;
+    const c1 = parseFloat(commission1.replace(",", ".")) || 0;
+    const c2 = parseFloat(commission2.replace(",", ".")) || 0;
+    const m = parseFloat(margin.replace(",", ".")) || 0;
+
+    const newItems: Omit<GgselWatchItem, "id" | "addedAt">[] = nominals
+      .filter(n => checkedItemIds.has(n.id))
+      .map(n => ({
+        categoryId,
+        title: `${selectedProduct.product.title} · ${n.title || n.code || "номінал"}`,
+        sourceType: "catalog" as const,
+        catalogSupplierId: selectedProduct.supplier.id,
+        catalogProductId: selectedProduct.product.id,
+        catalogItemId: n.id,
+        exchangeRate: rate,
+        commission1Percent: c1,
+        commission2Percent: c2,
+        myMarginPercent: m,
+        ggselPrice: undefined,
+        ggselPriceHistory: []
+      }));
+
+    onAddItems(newItems);
+    onClose();
+  };
+
+  if (!selectedProduct) {
+    return (
+      <>
+        <p className="text-xs text-gray-400">Введи назву товару з розділу "Товари"</p>
+        <div className="relative">
+          <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="напр. Xbox"
+            className={`${inputClass} pl-8`}
+          />
+        </div>
+        {query.trim() && (
+          <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+            {matches.length === 0 ? (
+              <p className="text-xs text-gray-500 px-3 py-3">Нічого не знайдено.</p>
+            ) : (
+              matches.map(m => (
+                <button
+                  key={m.product.id}
+                  onClick={() => setSelectedProduct(m)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/5 cursor-pointer"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs text-white truncate">{m.product.title}</p>
+                    <p className="text-[10px] text-gray-500 truncate">{m.supplier.name}</p>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
+          Скасувати
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => {
+          setSelectedProduct(null);
+          setCheckedItemIds(new Set());
+        }}
+        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" /> Інший товар
+      </button>
+
+      <div>
+        <p className="text-sm font-bold text-white">{selectedProduct.product.title}</p>
+        <p className="text-[11px] text-gray-500">{selectedProduct.supplier.name}</p>
+      </div>
+
+      {nominals.length === 0 ? (
+        <p className="text-xs text-gray-500">У цього товару ще немає номіналів.</p>
+      ) : (
+        <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+          {nominals.map(n => (
+            <label key={n.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={checkedItemIds.has(n.id)}
+                onChange={() => toggleItem(n.id)}
+                className="cursor-pointer accent-emerald-600"
+              />
+              <span className="text-xs text-white flex-1 truncate">{n.title || n.code || "Номінал"}</span>
+              <span className="text-xs font-mono text-gray-400">
+                {typeof n.price === "number" ? `${n.price} ${n.currency || selectedProduct.product.currency || "USD"}` : "—"}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {checkedItemIds.size > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {needsRate && (
+            <div>
+              <label className={labelClass}>Курс {sampleCurrency}→₽</label>
+              <input
+                value={exchangeRate}
+                onChange={e => setExchangeRate(e.target.value)}
+                placeholder={categoryDefaultRate ? `курс категорії: ${categoryDefaultRate}` : "напр. 95"}
+                inputMode="decimal"
+                className={inputClass}
+              />
+              {categoryDefaultRate && (
+                <p className="text-[9px] text-gray-600 mt-0.5">Лишиш порожнім — візьме курс категорії ({categoryDefaultRate})</p>
+              )}
+            </div>
           )}
           <div>
-            <label className={labelClass}>Назва товару</label>
-            <input value={title} onChange={e => setTitle(e.target.value)} className={inputClass} />
+            <label className={labelClass}>Комісія 1, %</label>
+            <input value={commission1} onChange={e => setCommission1(e.target.value)} inputMode="decimal" className={inputClass} />
           </div>
-
           <div>
-            <label className={labelClass}>Яку ціну Steam відстежувати</label>
-            <select value={countryCode} onChange={e => setCountryCode(e.target.value)} className={inputClass}>
-              {(watch?.prices || [])
-                .filter(p => typeof p.price === "number")
-                .map(p => (
-                  <option key={p.countryCode} value={p.countryCode}>
-                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
-                  </option>
-                ))}
-            </select>
+            <label className={labelClass}>Комісія 2, %</label>
+            <input value={commission2} onChange={e => setCommission2(e.target.value)} inputMode="decimal" className={inputClass} />
           </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {needsRate && (
-              <div>
-                <label className={labelClass}>Курс {selectedEntry?.currency}→₽</label>
-                <input
-                  value={exchangeRate}
-                  onChange={e => setExchangeRate(e.target.value)}
-                  placeholder={categoryDefaultRate ? `курс категорії: ${categoryDefaultRate}` : "напр. 95"}
-                  inputMode="decimal"
-                  className={inputClass}
-                />
-                {categoryDefaultRate && (
-                  <p className="text-[9px] text-gray-600 mt-0.5">Лишиш порожнім — візьме курс категорії ({categoryDefaultRate})</p>
-                )}
-              </div>
-            )}
-            <div>
-              <label className={labelClass}>Комісія 1, %</label>
-              <input value={commission1} onChange={e => setCommission1(e.target.value)} inputMode="decimal" className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>Комісія 2, %</label>
-              <input value={commission2} onChange={e => setCommission2(e.target.value)} inputMode="decimal" className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>Мій %</label>
-              <input value={margin} onChange={e => setMargin(e.target.value)} inputMode="decimal" className={inputClass} />
-            </div>
+          <div>
+            <label className={labelClass}>Мій %</label>
+            <input value={margin} onChange={e => setMargin(e.target.value)} inputMode="decimal" className={inputClass} />
           </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={!countryCode || !title.trim()}
-              className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
-            >
-              Зберегти
-            </button>
-            <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
-              Скасувати
-            </button>
-          </div>
-        </>
+        </div>
       )}
-    </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleAdd}
+          disabled={checkedItemIds.size === 0}
+          className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+        >
+          Додати ({checkedItemIds.size})
+        </button>
+        <button onClick={onClose} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 cursor-pointer">
+          Скасувати
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -502,6 +812,7 @@ function AddGgselItemPanel({
 function GgselItemCard({
   item,
   steamWatches,
+  suppliers,
   rubRates,
   categoryDefaultRate,
   onUpdateItem,
@@ -511,6 +822,7 @@ function GgselItemCard({
   key?: React.Key;
   item: GgselWatchItem;
   steamWatches: SteamWatchItem[];
+  suppliers: Supplier[];
   rubRates: Record<string, number>;
   categoryDefaultRate?: number;
   onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
@@ -527,19 +839,20 @@ function GgselItemCard({
   onRemove: (id: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const isCatalog = item.sourceType === "catalog";
 
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
-  const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
-  const steamPrice = entry?.price;
-  const steamCurrency = entry?.currency || "USD";
-  const needsRate = usesManualRate(steamCurrency, rubRates);
+  const source = resolveGgselPriceSource(item, steamWatches, suppliers);
+  const price = source.price;
+  const currency = source.currency;
+  const needsRate = usesManualRate(currency, rubRates);
   const effectiveRate = item.exchangeRate ?? categoryDefaultRate;
-  const baseRub = typeof steamPrice === "number" ? convertToRub(steamPrice, steamCurrency, effectiveRate, rubRates) : undefined;
+  const baseRub = typeof price === "number" ? convertToRub(price, currency, effectiveRate, rubRates) : undefined;
   const suggested =
     typeof baseRub === "number"
       ? computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent)
       : undefined;
-  const steamTrend = steamPriceTrend(steamPrice, entry?.priceHistory?.[0]);
+  const priceTrendValue = steamPriceTrend(price, source.priceHistory?.[0]);
 
   // Загорається лише коли розрахована ціна ВИЩА за ту, що вже стоїть на
   // ggsel (тобто ціну треба підняти). Якщо користувач сам поставив ціну
@@ -554,7 +867,7 @@ function GgselItemCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2">
-        {watch?.headerImage && (
+        {!isCatalog && watch?.headerImage && (
           <img
             src={watch.headerImage}
             alt=""
@@ -564,22 +877,30 @@ function GgselItemCard({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-white truncate">{item.title}</p>
           <div className="flex items-center gap-2 flex-wrap mt-0.5">
-            <span className="text-[11px] text-gray-500">Ціна Steam з країни:</span>
-            <select
-              value={item.steamCountryCode}
-              onChange={e => onUpdateItem(item.id, { steamCountryCode: e.target.value, exchangeRate: undefined })}
-              className="bg-black/30 border border-white/10 rounded-md px-1.5 py-0.5 text-[11px] text-white focus:outline-none focus:border-emerald-600/50 cursor-pointer"
-            >
-              {(watch?.prices || [])
-                .filter(p => typeof p.price === "number")
-                .map(p => (
-                  <option key={p.countryCode} value={p.countryCode}>
-                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
-                  </option>
-                ))}
-            </select>
-            {steamTrend === "up" && <span className="text-amber-400 text-[11px]">↑ подорожчав</span>}
-            {steamTrend === "down" && <span className="text-emerald-400 text-[11px]">↓ подешевшав</span>}
+            {isCatalog ? (
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <Package className="w-3 h-3" /> {source.label}
+              </span>
+            ) : (
+              <>
+                <span className="text-[11px] text-gray-500">Ціна Steam з країни:</span>
+                <select
+                  value={item.steamCountryCode}
+                  onChange={e => onUpdateItem(item.id, { steamCountryCode: e.target.value, exchangeRate: undefined })}
+                  className="bg-black/30 border border-white/10 rounded-md px-1.5 py-0.5 text-[11px] text-white focus:outline-none focus:border-emerald-600/50 cursor-pointer"
+                >
+                  {(watch?.prices || [])
+                    .filter(p => typeof p.price === "number")
+                    .map(p => (
+                      <option key={p.countryCode} value={p.countryCode}>
+                        {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
+                      </option>
+                    ))}
+                </select>
+              </>
+            )}
+            {priceTrendValue === "up" && <span className="text-amber-400 text-[11px]">↑ подорожчав</span>}
+            {priceTrendValue === "down" && <span className="text-emerald-400 text-[11px]">↓ подешевшав</span>}
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -596,7 +917,7 @@ function GgselItemCard({
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
           <p className="text-xs text-amber-300">
-            Steam подорожчав — рекомендована ціна на ggsel тепер <b>{suggested.toFixed(2)} ₽</b> (у тебе стоїть{" "}
+            Ціна джерела зросла — рекомендована ціна на ggsel тепер <b>{suggested.toFixed(2)} ₽</b> (у тебе стоїть{" "}
             {item.ggselPrice?.toFixed(2)} ₽) — підніми ціну на ggsel.
           </p>
         </div>
@@ -604,9 +925,9 @@ function GgselItemCard({
 
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label className={labelClass}>Ціна Steam</label>
+          <label className={labelClass}>{isCatalog ? "Ціна в каталозі" : "Ціна Steam"}</label>
           <div className="text-sm font-mono font-bold text-white">
-            {typeof steamPrice === "number" ? `${steamPrice} ${steamCurrency}` : "—"}
+            {typeof price === "number" ? `${price} ${currency}` : "—"}
           </div>
         </div>
         <div>
@@ -620,7 +941,7 @@ function GgselItemCard({
           <div className={`text-sm font-mono font-bold ${needsPriceIncrease ? "text-amber-400" : "text-emerald-400"}`}>
             {typeof suggested === "number" ? suggested.toFixed(2) : "—"}
           </div>
-          {steamCurrency !== "RUB" && (
+          {currency !== "RUB" && (
             <p className="text-[9px] text-gray-600 mt-0.5">
               {needsRate
                 ? item.exchangeRate
@@ -638,7 +959,7 @@ function GgselItemCard({
         <EditGgselItemModal
           item={item}
           needsRate={needsRate}
-          steamCurrency={steamCurrency}
+          steamCurrency={currency}
           categoryDefaultRate={categoryDefaultRate}
           onSaveItemDetails={onSaveItemDetails}
           onClose={() => setIsEditing(false)}
