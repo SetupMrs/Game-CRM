@@ -29,6 +29,7 @@ interface GgselManagerProps {
   onSaveItemDetails: (
     id: string,
     patch: {
+      title?: string;
       ggselPrice?: number;
       exchangeRate?: number;
       commission1Percent: number;
@@ -660,20 +661,25 @@ function AddCatalogItemFlow({
 
     const newItems: Omit<GgselWatchItem, "id" | "addedAt">[] = nominals
       .filter(n => checkedItemIds.has(n.id))
-      .map(n => ({
-        categoryId,
-        title: `${selectedProduct.product.title} · ${n.title || n.code || "номінал"}`,
-        sourceType: "catalog" as const,
-        catalogSupplierId: selectedProduct.supplier.id,
-        catalogProductId: selectedProduct.product.id,
-        catalogItemId: n.id,
-        exchangeRate: rate,
-        commission1Percent: c1,
-        commission2Percent: c2,
-        myMarginPercent: m,
-        ggselPrice: undefined,
-        ggselPriceHistory: []
-      }));
+      .map(n => {
+        const productTitle = selectedProduct.product.title.trim();
+        const nominalLabel = (n.title || n.code || "").trim();
+        const isSameAsProduct = !nominalLabel || nominalLabel.toLowerCase() === productTitle.toLowerCase();
+        return {
+          categoryId,
+          title: isSameAsProduct ? productTitle : `${productTitle} · ${nominalLabel}`,
+          sourceType: "catalog" as const,
+          catalogSupplierId: selectedProduct.supplier.id,
+          catalogProductId: selectedProduct.product.id,
+          catalogItemId: n.id,
+          exchangeRate: rate,
+          commission1Percent: c1,
+          commission2Percent: c2,
+          myMarginPercent: m,
+          ggselPrice: undefined,
+          ggselPriceHistory: []
+        };
+      });
 
     onAddItems(newItems);
     onClose();
@@ -829,6 +835,7 @@ function GgselItemCard({
   onSaveItemDetails: (
     id: string,
     patch: {
+      title?: string;
       ggselPrice?: number;
       exchangeRate?: number;
       commission1Percent: number;
@@ -986,6 +993,7 @@ function EditGgselItemModal({
   onSaveItemDetails: (
     id: string,
     patch: {
+      title?: string;
       ggselPrice?: number;
       exchangeRate?: number;
       commission1Percent: number;
@@ -995,6 +1003,7 @@ function EditGgselItemModal({
   ) => void;
   onClose: () => void;
 }) {
+  const [titleInput, setTitleInput] = useState(item.title);
   const [priceInput, setPriceInput] = useState(item.ggselPrice != null ? String(item.ggselPrice) : "");
   const [rateInput, setRateInput] = useState(item.exchangeRate != null ? String(item.exchangeRate) : "");
   const [c1Input, setC1Input] = useState(String(item.commission1Percent));
@@ -1004,6 +1013,7 @@ function EditGgselItemModal({
   const handleSave = () => {
     const priceNum = parseFloat(priceInput.replace(",", "."));
     onSaveItemDetails(item.id, {
+      title: titleInput,
       ggselPrice: !isNaN(priceNum) ? priceNum : undefined,
       exchangeRate: rateInput ? parseFloat(rateInput.replace(",", ".")) || undefined : undefined,
       commission1Percent: parseFloat(c1Input.replace(",", ".")) || 0,
@@ -1019,11 +1029,16 @@ function EditGgselItemModal({
         className="bg-[#161618] border border-white/10 rounded-xl w-full max-w-md p-5 space-y-3"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-bold text-white truncate">{item.title}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-bold text-white">Редагувати товар</p>
           <button onClick={onClose} className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer shrink-0">
             <X className="w-4 h-4 text-gray-400" />
           </button>
+        </div>
+
+        <div>
+          <label className={labelClass}>Назва</label>
+          <input value={titleInput} onChange={e => setTitleInput(e.target.value)} className={inputClass} />
         </div>
 
         <div>

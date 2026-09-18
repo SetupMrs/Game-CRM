@@ -1319,6 +1319,7 @@ export default function App() {
   const handleUpdateGgselItemFull = (
     itemId: string,
     patch: {
+      title?: string;
       ggselPrice?: number;
       exchangeRate?: number;
       commission1Percent: number;
@@ -1346,6 +1347,7 @@ export default function App() {
         i.id === itemId
           ? {
               ...i,
+              title: patch.title?.trim() ? patch.title.trim() : i.title,
               ggselPrice,
               ggselPriceHistory: priceHistory,
               exchangeRate: patch.exchangeRate,
