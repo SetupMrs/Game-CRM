@@ -68,6 +68,19 @@ function usesManualRate(currency: string, rubRates: Record<string, number>): boo
   return typeof rubRates[cur] !== "number";
 }
 
+// Для списку вибору країни: показуємо одразу в рублях, де можемо
+// автоматично конвертувати (усе, крім долара). Долар лишається у своїй
+// валюті, бо курс для нього користувач вводить вручну сам — заздалегідь
+// авто-конвертувати нема з чого.
+function formatDropdownPrice(price: number, currency: string, rubRates: Record<string, number>): string {
+  const cur = (currency || "USD").toUpperCase();
+  if (cur === "RUB") return `${price.toFixed(2)} ₽`;
+  if (cur === "USD") return `${price} USD (курс вручну)`;
+  const liveRate = rubRates[cur];
+  if (typeof liveRate === "number") return `≈${(price * liveRate).toFixed(2)} ₽`;
+  return `${price} ${cur} (курс вручну)`;
+}
+
 const inputClass =
   "w-full bg-black/30 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-600/50";
 const labelClass = "text-[9px] text-gray-500 uppercase font-bold block mb-1";
@@ -357,7 +370,7 @@ function AddGgselItemPanel({
                 .filter(p => typeof p.price === "number")
                 .map(p => (
                   <option key={p.countryCode} value={p.countryCode}>
-                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {p.price} {p.currency}
+                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
                   </option>
                 ))}
             </select>
@@ -482,7 +495,7 @@ function GgselItemCard({
                 .filter(p => typeof p.price === "number")
                 .map(p => (
                   <option key={p.countryCode} value={p.countryCode}>
-                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {p.price} {p.currency}
+                    {STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()} — {formatDropdownPrice(p.price!, p.currency || "USD", rubRates)}
                   </option>
                 ))}
             </select>
