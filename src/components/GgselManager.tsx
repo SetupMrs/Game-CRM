@@ -164,6 +164,7 @@ export default function GgselManager({
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
   const [showPaused, setShowPaused] = useState(false);
+  const [viewMode, setViewMode] = useState<"categories" | "calculator">("categories");
   const [rubRates, setRubRates] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -229,6 +230,29 @@ export default function GgselManager({
 
   return (
     <div className="space-y-4">
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => setViewMode("categories")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold ${
+            viewMode === "categories" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          Категорії
+        </button>
+        <button
+          onClick={() => setViewMode("calculator")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold flex items-center gap-1.5 ${
+            viewMode === "calculator" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          <Calculator className="w-3.5 h-3.5" /> Калькулятор
+        </button>
+      </div>
+
+      {viewMode === "calculator" ? (
+        <GgselStandaloneCalculator suppliers={suppliers} steamWatches={steamWatches} rubRates={rubRates} onLookupOrAddSteamWatch={onLookupOrAddSteamWatch} />
+      ) : (
+      <>
       <div className="flex items-center gap-2 flex-wrap">
         {categories.map(cat => (
           <button
@@ -424,6 +448,8 @@ export default function GgselManager({
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );
@@ -882,6 +908,321 @@ function AddCatalogItemFlow({
 // --- Groups items that share the same underlying product/package and shows
 // "base price + increase per nominal" exactly the way ggsel's own admin
 // panel expects it (Цена товара / Увеличение цены на, which can be negative) ---
+
+// --- Standalone calculator: search a product, pick nominals, mark one as
+// base, see "price + increase (can be negative)" — nothing gets saved into
+// any category, this is a pure on-the-fly lookup tool. ---------------------
+
+function GgselStandaloneCalculator({
+  suppliers,
+  steamWatches,
+  rubRates,
+  onLookupOrAddSteamWatch
+}: {
+  suppliers: Supplier[];
+  steamWatches: SteamWatchItem[];
+  rubRates: Record<string, number>;
+  onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
+}) {
+  const [sourceMode, setSourceMode] = useState<"steam" | "catalog">("catalog");
+
+  // Shared calculator settings
+  const [commission1, setCommission1] = useState("0");
+  const [commission2, setCommission2] = useState("0");
+  const [margin, setMargin] = useState("0");
+  const [rate, setRate] = useState("");
+
+  // Catalog search
+  const [query, setQuery] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<{ supplier: Supplier; product: ProductCard } | null>(null);
+  const [checkedItemIds, setCheckedItemIds] = useState<Set<string>>(new Set());
+  const [mainId, setMainId] = useState<string | null>(null);
+
+  // Steam search
+  const [steamInput, setSteamInput] = useState("");
+  const [steamBusy, setSteamBusy] = useState(false);
+  const [steamError, setSteamError] = useState<string | null>(null);
+  const [steamWatch, setSteamWatch] = useState<SteamWatchItem | null>(null);
+  const [checkedCountries, setCheckedCountries] = useState<Set<string>>(new Set());
+
+  const matches = (() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const results: { supplier: Supplier; product: ProductCard }[] = [];
+    for (const supplier of suppliers) {
+      if (supplier.deletedAt) continue;
+      for (const product of supplier.products || []) {
+        if (product.deletedAt) continue;
+        if (product.title.toLowerCase().includes(q)) {
+          results.push({ supplier, product });
+          if (results.length >= 20) return results;
+        }
+      }
+    }
+    return results;
+  })();
+
+  const handleSteamLookup = async () => {
+    if (!steamInput.trim() || steamBusy) return;
+    setSteamBusy(true);
+    setSteamError(null);
+    const result = await onLookupOrAddSteamWatch(steamInput.trim());
+    setSteamBusy(false);
+    if (!result.success || !result.watch) {
+      setSteamError(result.message || "Не вдалося знайти товар.");
+      return;
+    }
+    setSteamWatch(result.watch);
+    setCheckedCountries(new Set());
+    setMainId(null);
+  };
+
+  // Build a flat list of "rows" to calculate, whichever source is active.
+  type Row = { id: string; title: string; price?: number; currency: string };
+  let rows: Row[] = [];
+  if (sourceMode === "catalog" && selectedProduct) {
+    rows = (selectedProduct.product.items || [])
+      .filter(n => checkedItemIds.has(n.id))
+      .map(n => ({ id: n.id, title: n.title || n.code || "Номінал", price: n.price, currency: n.currency || selectedProduct.product.currency || "USD" }));
+  } else if (sourceMode === "steam" && steamWatch) {
+    rows = steamWatch.prices
+      .filter(p => checkedCountries.has(p.countryCode) && typeof p.price === "number")
+      .map(p => ({ id: p.countryCode, title: STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase(), price: p.price, currency: p.currency || "USD" }));
+  }
+
+  const rateNum = rate ? parseFloat(rate.replace(",", ".")) : undefined;
+  const c1 = parseFloat(commission1.replace(",", ".")) || 0;
+  const c2 = parseFloat(commission2.replace(",", ".")) || 0;
+  const m = parseFloat(margin.replace(",", ".")) || 0;
+
+  const computed = rows.map(r => {
+    const baseRub = typeof r.price === "number" ? convertToRub(r.price, r.currency, rateNum, rubRates) : undefined;
+    const suggested = typeof baseRub === "number" ? computeGgselSuggestedPrice(baseRub, c1, c2, m) : undefined;
+    return { ...r, suggested };
+  });
+
+  const effectiveMainId = mainId && computed.some(r => r.id === mainId) ? mainId : computed[0]?.id || null;
+  const mainRow = computed.find(r => r.id === effectiveMainId);
+  const anyNeedsRate = rows.some(r => usesManualRate(r.currency, rubRates));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => setSourceMode("catalog")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold ${
+            sourceMode === "catalog" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          Наш каталог
+        </button>
+        <button
+          onClick={() => setSourceMode("steam")}
+          className={`text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold ${
+            sourceMode === "steam" ? "bg-emerald-600 text-white" : "bg-white/5 text-gray-400 hover:text-white"
+          }`}
+        >
+          Steam
+        </button>
+      </div>
+
+      {sourceMode === "catalog" ? (
+        !selectedProduct ? (
+          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+            <p className="text-xs text-gray-400">Введи назву товару з розділу "Товари"</p>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="напр. Brawl Stars"
+                className={`${inputClass} pl-8`}
+              />
+            </div>
+            {query.trim() && (
+              <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+                {matches.length === 0 ? (
+                  <p className="text-xs text-gray-500 px-3 py-3">Нічого не знайдено.</p>
+                ) : (
+                  matches.map(m => (
+                    <button
+                      key={m.product.id}
+                      onClick={() => {
+                        setSelectedProduct(m);
+                        setCheckedItemIds(new Set());
+                        setMainId(null);
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/5 cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs text-white truncate">{m.product.title}</p>
+                        <p className="text-[10px] text-gray-500 truncate">{m.supplier.name}</p>
+                      </div>
+                      <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+            <button
+              onClick={() => {
+                setSelectedProduct(null);
+                setCheckedItemIds(new Set());
+              }}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Інший товар
+            </button>
+            <div>
+              <p className="text-sm font-bold text-white">{selectedProduct.product.title}</p>
+              <p className="text-[11px] text-gray-500">{selectedProduct.supplier.name}</p>
+            </div>
+            <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+              {(selectedProduct.product.items || []).map(n => (
+                <label key={n.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={checkedItemIds.has(n.id)}
+                    onChange={() => {
+                      setCheckedItemIds(prev => {
+                        const next = new Set(prev);
+                        if (next.has(n.id)) next.delete(n.id);
+                        else next.add(n.id);
+                        return next;
+                      });
+                    }}
+                    className="cursor-pointer accent-emerald-600"
+                  />
+                  <span className="text-xs text-white flex-1 truncate">{n.title || n.code || "Номінал"}</span>
+                  <span className="text-xs font-mono text-gray-400">
+                    {typeof n.price === "number" ? `${n.price} ${n.currency || selectedProduct.product.currency || "USD"}` : "—"}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )
+      ) : !steamWatch ? (
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+          <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
+          <input
+            value={steamInput}
+            onChange={e => setSteamInput(e.target.value)}
+            placeholder="store.steampowered.com/sub/... або id"
+            className={inputClass}
+            onKeyDown={e => {
+              if (e.key === "Enter") handleSteamLookup();
+            }}
+          />
+          {steamError && <p className="text-xs text-red-400">{steamError}</p>}
+          <button
+            onClick={handleSteamLookup}
+            disabled={steamBusy}
+            className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+          >
+            {steamBusy ? "Шукаю..." : "Знайти"}
+          </button>
+        </div>
+      ) : (
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+          <button
+            onClick={() => {
+              setSteamWatch(null);
+              setCheckedCountries(new Set());
+            }}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Інший товар
+          </button>
+          <p className="text-sm font-bold text-white">{steamWatch.title}</p>
+          <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+            {steamWatch.prices
+              .filter(p => typeof p.price === "number")
+              .map(p => (
+                <label key={p.countryCode} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={checkedCountries.has(p.countryCode)}
+                    onChange={() => {
+                      setCheckedCountries(prev => {
+                        const next = new Set(prev);
+                        if (next.has(p.countryCode)) next.delete(p.countryCode);
+                        else next.add(p.countryCode);
+                        return next;
+                      });
+                    }}
+                    className="cursor-pointer accent-emerald-600"
+                  />
+                  <span className="text-xs text-white flex-1 truncate">{STEAM_COUNTRY_LABELS[p.countryCode] || p.countryCode.toUpperCase()}</span>
+                  <span className="text-xs font-mono text-gray-400">{p.price} {p.currency}</span>
+                </label>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-2xl">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {anyNeedsRate && (
+              <div>
+                <label className={labelClass}>Курс →₽</label>
+                <input value={rate} onChange={e => setRate(e.target.value)} placeholder="напр. 95" inputMode="decimal" className={inputClass} />
+              </div>
+            )}
+            <div>
+              <label className={labelClass}>Комісія 1, %</label>
+              <input value={commission1} onChange={e => setCommission1(e.target.value)} inputMode="decimal" className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Комісія 2, %</label>
+              <input value={commission2} onChange={e => setCommission2(e.target.value)} inputMode="decimal" className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Мій %</label>
+              <input value={margin} onChange={e => setMargin(e.target.value)} inputMode="decimal" className={inputClass} />
+            </div>
+          </div>
+
+          <div className="px-1 text-[11px] text-gray-400">
+            Цена товара (база): <span className="font-mono font-bold text-white">{typeof mainRow?.suggested === "number" ? mainRow.suggested.toFixed(2) : "—"} ₽</span>
+            {mainRow && ` — з номіналу «${mainRow.title}»`}
+          </div>
+
+          <div className="border border-white/5 rounded-lg overflow-hidden divide-y divide-white/5">
+            {computed.map(r => {
+              const isMain = r.id === effectiveMainId;
+              const increase = typeof r.suggested === "number" && typeof mainRow?.suggested === "number" ? r.suggested - mainRow.suggested : undefined;
+              return (
+                <div key={r.id} className="flex items-center justify-between gap-2 px-3 py-2">
+                  <button onClick={() => setMainId(r.id)} className="flex items-center gap-1.5 min-w-0 cursor-pointer text-left">
+                    <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
+                    <span className="text-xs text-white truncate">{r.title}</span>
+                  </button>
+                  <div className="flex items-center gap-4 shrink-0">
+                    <span className="text-xs font-mono text-gray-400">{typeof r.suggested === "number" ? `${r.suggested.toFixed(2)} ₽` : "—"}</span>
+                    <span
+                      className={`text-xs font-mono font-bold w-20 text-right ${
+                        isMain ? "text-gray-500" : typeof increase === "number" && increase < 0 ? "text-emerald-400" : "text-amber-400"
+                      }`}
+                    >
+                      {isMain ? "база" : typeof increase === "number" ? `${increase > 0 ? "+" : ""}${increase.toFixed(2)}` : "—"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function GgselGroupCalculator({
   categoryItems,
