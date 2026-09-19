@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry, Supplier, ProductCard, CategoryItem } from "../types";
 import { computeGgselSuggestedPrice } from "../utils";
 import { apiFetch } from "../apiClient";
-import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package, Pause, Play } from "lucide-react";
+import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package, Pause, Play, Star, Calculator } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
   ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
@@ -39,6 +39,7 @@ interface GgselManagerProps {
   ) => void;
   onRemoveItem: (id: string) => void;
   onTogglePaused: (id: string) => void;
+  onSetMainNominal: (id: string) => void;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
 
@@ -102,6 +103,27 @@ function usesManualRate(currency: string, rubRates: Record<string, number>): boo
   return typeof rubRates[cur] !== "number";
 }
 
+// Рекомендована ціна товару в рублях за курсом+комісіями+% — та сама
+// формула, що й у картці, винесена окремо для групового калькулятора.
+function computeItemSuggestedRub(
+  item: GgselWatchItem,
+  steamWatches: SteamWatchItem[],
+  suppliers: Supplier[],
+  rubRates: Record<string, number>,
+  categoryDefaultRate: number | undefined
+): number | undefined {
+  const source = resolveGgselPriceSource(item, steamWatches, suppliers);
+  if (typeof source.price !== "number") return undefined;
+  const effectiveRate = item.exchangeRate ?? categoryDefaultRate;
+  const baseRub = convertToRub(source.price, source.currency, effectiveRate, rubRates);
+  if (typeof baseRub !== "number") return undefined;
+  return computeGgselSuggestedPrice(baseRub, item.commission1Percent, item.commission2Percent, item.myMarginPercent);
+}
+
+function ggselGroupKey(item: GgselWatchItem): string {
+  return item.sourceType === "catalog" ? `catalog:${item.catalogProductId}` : `steam:${item.steamPackageId}`;
+}
+
 // Для списку вибору країни: показуємо одразу в рублях, де можемо
 // автоматично конвертувати (усе, крім долара). Долар лишається у своїй
 // валюті, бо курс для нього користувач вводить вручну сам — заздалегідь
@@ -134,6 +156,7 @@ export default function GgselManager({
   onSaveItemDetails,
   onRemoveItem,
   onTogglePaused,
+  onSetMainNominal,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(categories[0]?.id || null);
@@ -366,6 +389,17 @@ export default function GgselManager({
             />
           )}
 
+          {!showPaused && (
+            <GgselGroupCalculator
+              categoryItems={activeCategoryItems}
+              steamWatches={steamWatches}
+              suppliers={suppliers}
+              rubRates={rubRates}
+              categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
+              onSetMainNominal={onSetMainNominal}
+            />
+          )}
+
           {categoryItems.length === 0 && !showAddItem ? (
             <p className="text-xs text-gray-500 py-6 text-center">
               {showPaused ? "Немає призупинених товарів." : "Ще немає товарів у цій категорії."}
@@ -384,6 +418,7 @@ export default function GgselManager({
                   onSaveItemDetails={onSaveItemDetails}
                   onRemove={onRemoveItem}
                   onTogglePaused={onTogglePaused}
+                  onSetMainNominal={onSetMainNominal}
                 />
               ))}
             </div>
@@ -844,6 +879,91 @@ function AddCatalogItemFlow({
 
 // --- One tracked ggsel item: compact card + edit modal --------------------
 
+// --- Groups items that share the same underlying product/package and shows
+// "base price + increase per nominal" exactly the way ggsel's own admin
+// panel expects it (Цена товара / Увеличение цены на, which can be negative) ---
+
+function GgselGroupCalculator({
+  categoryItems,
+  steamWatches,
+  suppliers,
+  rubRates,
+  categoryDefaultRate,
+  onSetMainNominal
+}: {
+  categoryItems: GgselWatchItem[];
+  steamWatches: SteamWatchItem[];
+  suppliers: Supplier[];
+  rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
+  onSetMainNominal: (id: string) => void;
+}) {
+  const groups: Record<string, GgselWatchItem[]> = {};
+  categoryItems.forEach(item => {
+    const key = ggselGroupKey(item);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  });
+  const groupEntries = Object.values(groups).filter(g => g.length > 1);
+
+  if (groupEntries.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-gray-500 flex items-center gap-1.5">
+        <Calculator className="w-3.5 h-3.5" /> Калькулятор для ggsel — база + "Збільшення ціни" на варіант
+      </p>
+      {groupEntries.map(groupItems => {
+        const mainItem = groupItems.find(i => i.isMainNominal) || groupItems[0];
+        const mainPrice = computeItemSuggestedRub(mainItem, steamWatches, suppliers, rubRates, categoryDefaultRate);
+        return (
+          <div key={ggselGroupKey(mainItem)} className="border border-white/5 rounded-xl overflow-hidden bg-[#111112]">
+            <div className="px-3 py-2 bg-black/20 text-[11px] text-gray-400 border-b border-white/5">
+              Цена товара (база): <span className="font-mono font-bold text-white">{typeof mainPrice === "number" ? mainPrice.toFixed(2) : "—"} ₽</span>
+              {" "}— з номіналу «{mainItem.title}»
+            </div>
+            <div className="divide-y divide-white/5">
+              {groupItems.map(item => {
+                const price = computeItemSuggestedRub(item, steamWatches, suppliers, rubRates, categoryDefaultRate);
+                const increase =
+                  typeof price === "number" && typeof mainPrice === "number" ? price - mainPrice : undefined;
+                const isMain = item.id === mainItem.id;
+                return (
+                  <div key={item.id} className="flex items-center justify-between gap-2 px-3 py-2">
+                    <button
+                      onClick={() => onSetMainNominal(item.id)}
+                      className="flex items-center gap-1.5 min-w-0 cursor-pointer text-left"
+                      title={isMain ? "Прибрати позначку головного" : "Зробити головним"}
+                    >
+                      <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
+                      <span className="text-xs text-white truncate">{item.title}</span>
+                    </button>
+                    <div className="flex items-center gap-4 shrink-0">
+                      <span className="text-xs font-mono text-gray-400">{typeof price === "number" ? `${price.toFixed(2)} ₽` : "—"}</span>
+                      <span
+                        className={`text-xs font-mono font-bold w-20 text-right ${
+                          isMain
+                            ? "text-gray-500"
+                            : typeof increase === "number" && increase < 0
+                              ? "text-emerald-400"
+                              : "text-amber-400"
+                        }`}
+                      >
+                        {isMain ? "база" : typeof increase === "number" ? `${increase > 0 ? "+" : ""}${increase.toFixed(2)}` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
 function GgselItemCard({
   item,
   steamWatches,
@@ -853,7 +973,8 @@ function GgselItemCard({
   onUpdateItem,
   onSaveItemDetails,
   onRemove,
-  onTogglePaused
+  onTogglePaused,
+  onSetMainNominal
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -875,6 +996,7 @@ function GgselItemCard({
   ) => void;
   onRemove: (id: string) => void;
   onTogglePaused: (id: string) => void;
+  onSetMainNominal: (id: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const isCatalog = item.sourceType === "catalog";
@@ -915,6 +1037,11 @@ function GgselItemCard({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-white truncate">
             {item.title}
+            {item.isMainNominal && (
+              <span className="ml-2 text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-sm px-1.5 py-0.5 align-middle">
+                ★ Головний
+              </span>
+            )}
             {item.isPaused && (
               <span className="ml-2 text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-sm px-1.5 py-0.5 align-middle">
                 Призупинено
@@ -949,6 +1076,13 @@ function GgselItemCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => onSetMainNominal(item.id)}
+            className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer"
+            title={item.isMainNominal ? "Прибрати позначку головного номіналу" : "Позначити головним номіналом (база для \"Збільшення ціни\" в ggsel)"}
+          >
+            <Star className={`w-3.5 h-3.5 ${item.isMainNominal ? "text-amber-400 fill-amber-400" : "text-gray-500"}`} />
+          </button>
           <button
             onClick={() => onTogglePaused(item.id)}
             className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer"

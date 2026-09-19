@@ -1390,6 +1390,27 @@ export default function App() {
     saveStateToDisk(withLog(updated, nowPaused ? "Призупинив товар у ggsel" : "Відновив товар у ggsel", "product", item.title));
   };
 
+  // "Головний" номінал — база, від якої рахується "Збільшення ціни" (може
+  // бути й від'ємним) для решти номіналів того самого товару/пакета в
+  // групі. Повторний клік на вже головному номіналі знімає позначку.
+  const ggselGroupKey = (item: GgselWatchItem): string =>
+    item.sourceType === "catalog" ? `${item.categoryId}:catalog:${item.catalogProductId}` : `${item.categoryId}:steam:${item.steamPackageId}`;
+
+  const handleSetMainNominal = (itemId: string) => {
+    const item = (db.ggselItems || []).find(i => i.id === itemId);
+    if (!item) return;
+    const groupKey = ggselGroupKey(item);
+    const willBeMain = !item.isMainNominal;
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i => {
+        if (ggselGroupKey(i) !== groupKey) return i;
+        return { ...i, isMainNominal: i.id === itemId ? willBeMain : false };
+      })
+    };
+    saveStateToDisk(updated);
+  };
+
   const handleToggleProductAdded = (supId: string, prodId: string) => {
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const targetProd = supplier?.products?.find(p => p.id === prodId);
@@ -1985,6 +2006,7 @@ export default function App() {
                     onSaveItemDetails={handleUpdateGgselItemFull}
                     onRemoveItem={handleRemoveGgselItem}
                     onTogglePaused={handleToggleGgselItemPaused}
+                    onSetMainNominal={handleSetMainNominal}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />
                 )}

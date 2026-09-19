@@ -242,6 +242,7 @@ export interface GgselWatchItem {
   commission2Percent: number; // другий % комісії ggsel
   myMarginPercent: number; // бажаний % прибутку
   isPaused?: boolean; // призупинено (напр. номінал закінчився) — прибрано зі спостереження, але не видалено
+  isMainNominal?: boolean; // "головний" номінал у своїй групі (той самий товар/пакет) — база для розрахунку "Збільшення ціни" в ggsel
   addedAt: string; // ISO
 }
 
