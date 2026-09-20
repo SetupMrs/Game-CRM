@@ -1404,7 +1404,7 @@ function GgselProductGroupCard({
     const trend = steamPriceTrend(src.price, src.priceHistory?.[0]);
     if (trend === "up") upCount++;
     if (trend === "down") downCount++;
-    if (src.inStock === false && !item.isPaused) outOfStockCount++;
+    if (src.inStock === false) outOfStockCount++;
   });
 
   const saveTitle = () => {
@@ -1559,7 +1559,7 @@ function GgselGroupRow({
         <span className="text-xs text-white truncate">{item.title}</span>
         {priceTrendValue === "up" && <span className="text-amber-400 text-[10px] shrink-0">↑</span>}
         {priceTrendValue === "down" && <span className="text-emerald-400 text-[10px] shrink-0">↓</span>}
-        {source.inStock === false && !item.isPaused && (
+        {source.inStock === false && (
           <span
             className="text-[8px] font-bold uppercase text-red-400 bg-red-500/10 border border-red-500/20 rounded-sm px-1 py-0.5 shrink-0"
             title="За даними LetsKeys цього номіналу немає в наявності"
@@ -1682,7 +1682,7 @@ function GgselItemCard({
                 ★ Головний
               </span>
             )}
-            {source.inStock === false && !item.isPaused && (
+            {source.inStock === false && (
               <span
                 className="ml-2 text-[9px] font-bold uppercase text-red-400 bg-red-500/10 border border-red-500/20 rounded-sm px-1.5 py-0.5 align-middle"
                 title="За даними LetsKeys цього номіналу немає в наявності"
