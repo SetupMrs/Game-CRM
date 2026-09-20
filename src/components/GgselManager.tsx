@@ -40,6 +40,7 @@ interface GgselManagerProps {
   onRemoveItem: (id: string) => void;
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
+  onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
 
@@ -157,6 +158,7 @@ export default function GgselManager({
   onRemoveItem,
   onTogglePaused,
   onSetMainNominal,
+  onUpdateGroupTitle,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(categories[0]?.id || null);
@@ -422,10 +424,13 @@ export default function GgselManager({
               {(() => {
                 // Групуємо номінали одного й того ж товару/пакета в одну
                 // об'єднану картку замість того, щоб розсипати їх окремими
-                // картками по сітці.
+                // картками по сітці. У режимі "Активні" призупинений номінал
+                // усередині товару, де є хоч один активний, не зникає — його
+                // видно приглушеним прямо в тій самій картці товару.
+                const sourceItems = showPaused ? categoryItems : allCategoryItems;
                 const groups: Record<string, GgselWatchItem[]> = {};
                 const order: string[] = [];
-                categoryItems.forEach(item => {
+                sourceItems.forEach(item => {
                   const key = ggselGroupKey(item);
                   if (!groups[key]) {
                     groups[key] = [];
@@ -433,7 +438,11 @@ export default function GgselManager({
                   }
                   groups[key].push(item);
                 });
-                return order.map(key => {
+                const visibleKeys = order.filter(key => {
+                  const groupItems = groups[key];
+                  return showPaused ? groupItems.some(i => i.isPaused) : groupItems.some(i => !i.isPaused);
+                });
+                return visibleKeys.map(key => {
                   const groupItems = groups[key];
                   if (groupItems.length === 1) {
                     const item = groupItems[0];
@@ -466,6 +475,7 @@ export default function GgselManager({
                       onRemove={onRemoveItem}
                       onTogglePaused={onTogglePaused}
                       onSetMainNominal={onSetMainNominal}
+                      onUpdateGroupTitle={onUpdateGroupTitle}
                     />
                   );
                 });
@@ -1345,7 +1355,8 @@ function GgselProductGroupCard({
   onSaveItemDetails,
   onRemove,
   onTogglePaused,
-  onSetMainNominal
+  onSetMainNominal,
+  onUpdateGroupTitle
 }: {
   key?: React.Key;
   items: GgselWatchItem[];
@@ -1368,17 +1379,35 @@ function GgselProductGroupCard({
   onRemove: (id: string) => void;
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
+  onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
 }) {
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
   const first = items[0];
   const isCatalog = first.sourceType === "catalog";
   const supplier = suppliers.find(s => s.id === first.catalogSupplierId);
   const product = supplier?.products.find(p => p.id === first.catalogProductId);
   const watch = steamWatches.find(w => w.packageId === first.steamPackageId);
-  const headerTitle = isCatalog ? product?.title || first.title : watch?.title || first.title;
+  const overrideTitle = items.find(i => i.groupTitleOverride)?.groupTitleOverride;
+  const headerTitle = overrideTitle || (isCatalog ? product?.title || first.title : watch?.title || first.title);
   const headerSubtitle = isCatalog ? supplier?.name : "Steam";
+  const [titleInput, setTitleInput] = useState(headerTitle);
 
   const mainItem = items.find(i => i.isMainNominal) || items[0];
   const mainPrice = computeItemSuggestedRub(mainItem, steamWatches, suppliers, rubRates, categoryDefaultRate);
+
+  let upCount = 0;
+  let downCount = 0;
+  items.forEach(item => {
+    const src = resolveGgselPriceSource(item, steamWatches, suppliers);
+    const trend = steamPriceTrend(src.price, src.priceHistory?.[0]);
+    if (trend === "up") upCount++;
+    if (trend === "down") downCount++;
+  });
+
+  const saveTitle = () => {
+    onUpdateGroupTitle(items.map(i => i.id), titleInput);
+    setIsEditingTitle(false);
+  };
 
   return (
     <div className="border border-white/5 rounded-xl bg-[#111112] p-4 space-y-3 lg:col-span-2 2xl:col-span-3">
@@ -1387,10 +1416,54 @@ function GgselProductGroupCard({
           <img src={watch.headerImage} alt="" className="w-16 h-8 object-cover rounded-md border border-white/10 shrink-0" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-white truncate">{headerTitle}</p>
-          <p className="text-[11px] text-gray-500 flex items-center gap-1">
+          {isEditingTitle ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={titleInput}
+                onChange={e => setTitleInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") saveTitle();
+                  if (e.key === "Escape") {
+                    setTitleInput(headerTitle);
+                    setIsEditingTitle(false);
+                  }
+                }}
+                className="bg-black/30 border border-white/10 rounded-md px-2 py-1 text-sm text-white w-full max-w-xs focus:outline-none focus:border-emerald-600/50"
+              />
+              <button onClick={saveTitle} className="p-1 bg-emerald-600 hover:bg-emerald-500 rounded cursor-pointer">
+                <Check className="w-3.5 h-3.5 text-white" />
+              </button>
+              <button
+                onClick={() => {
+                  setTitleInput(headerTitle);
+                  setIsEditingTitle(false);
+                }}
+                className="p-1 hover:bg-white/5 rounded cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5 text-gray-400" />
+              </button>
+            </div>
+          ) : (
+            <p className="text-sm font-bold text-white truncate flex items-center gap-1.5 group">
+              {headerTitle}
+              <button
+                onClick={() => {
+                  setTitleInput(headerTitle);
+                  setIsEditingTitle(true);
+                }}
+                className="p-0.5 hover:bg-white/5 rounded cursor-pointer shrink-0"
+                title="Перейменувати товар"
+              >
+                <Pencil className="w-3 h-3 text-gray-600" />
+              </button>
+            </p>
+          )}
+          <p className="text-[11px] text-gray-500 flex items-center gap-1.5">
             {isCatalog ? <Package className="w-3 h-3" /> : null}
             {headerSubtitle} · {items.length} номіналів
+            {upCount > 0 && <span className="text-amber-400 font-mono">↑{upCount}</span>}
+            {downCount > 0 && <span className="text-emerald-400 font-mono">↓{downCount}</span>}
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -1466,12 +1539,15 @@ function GgselGroupRow({
   const suggested = computeItemSuggestedRub(item, steamWatches, suppliers, rubRates, categoryDefaultRate);
   const increase = typeof suggested === "number" && typeof mainPrice === "number" ? suggested - mainPrice : undefined;
   const needsPriceIncrease = typeof suggested === "number" && typeof item.ggselPrice === "number" && suggested - item.ggselPrice > 1;
+  const priceTrendValue = steamPriceTrend(source.price, source.priceHistory?.[0]);
 
   return (
     <div className={`flex items-center justify-between gap-2 px-3 py-2 ${item.isPaused ? "opacity-50" : ""} ${needsPriceIncrease && !item.isPaused ? "bg-amber-500/5" : ""}`}>
       <button onClick={() => onSetMainNominal(item.id)} className="flex items-center gap-1.5 min-w-0 cursor-pointer text-left">
         <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
         <span className="text-xs text-white truncate">{item.title}</span>
+        {priceTrendValue === "up" && <span className="text-amber-400 text-[10px] shrink-0">↑</span>}
+        {priceTrendValue === "down" && <span className="text-emerald-400 text-[10px] shrink-0">↓</span>}
         {item.isPaused && <span className="text-[8px] font-bold uppercase text-amber-400 shrink-0">пауза</span>}
       </button>
       <div className="flex items-center gap-3 shrink-0">

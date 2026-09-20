@@ -1411,6 +1411,20 @@ export default function App() {
     saveStateToDisk(updated);
   };
 
+  // Перейменування товару-групи (кілька номіналів одного товару в
+  // об'єднаній картці ggsel) — оновлюємо на всіх номіналах групи одним
+  // запитом, щоб уникнути застарілого замикання.
+  const handleUpdateGgselGroupTitle = (itemIds: string[], newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const idSet = new Set(itemIds);
+    const updated = {
+      ...db,
+      ggselItems: (db.ggselItems || []).map(i => (idSet.has(i.id) ? { ...i, groupTitleOverride: trimmed } : i))
+    };
+    saveStateToDisk(updated);
+  };
+
   const handleToggleProductAdded = (supId: string, prodId: string) => {
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const targetProd = supplier?.products?.find(p => p.id === prodId);
@@ -2007,6 +2021,7 @@ export default function App() {
                     onRemoveItem={handleRemoveGgselItem}
                     onTogglePaused={handleToggleGgselItemPaused}
                     onSetMainNominal={handleSetMainNominal}
+                    onUpdateGroupTitle={handleUpdateGgselGroupTitle}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />
                 )}
