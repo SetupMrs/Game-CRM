@@ -1905,7 +1905,10 @@ export default function SupplierManager({
                 </div>
               </div>
               
-              {/* Form to add goods */}
+              {/* Form to add goods — не потрібна для товарів, автоматично
+                  синхронізованих з LetsKeys: номінали там додаються й
+                  оновлюються синхронізацією, а не вручну. */}
+              {currentCategory.externalSource !== "letskeys" && (
               <div className="bg-[#161618] border border-white/5 rounded-xl p-4 space-y-4">
                 <div className="flex justify-between items-center border-b border-white/5 pb-2">
                   <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -2005,6 +2008,12 @@ export default function SupplierManager({
                   </form>
                 )}
               </div>
+              )}
+              {currentCategory.externalSource === "letskeys" && (
+                <p className="text-[10px] text-gray-500 italic px-1">
+                  Номінали цього товару підтягуються автоматично з LetsKeys — додавати коди вручну не потрібно. Щоб оновити ціни/наявність, використай «Синхронізувати» на постачальнику.
+                </p>
+              )}
 
               {/* Items List */}
               <div className="space-y-3">
@@ -2109,6 +2118,14 @@ export default function SupplierManager({
                                         {item.priceHistory && item.priceHistory.length > 0 && (
                                           <span className="text-emerald-500/70"> ({item.priceHistory.length})</span>
                                         )}
+                                      </span>
+                                    )}
+                                    {item.externalInStock === false && (
+                                      <span
+                                        className="bg-red-500/10 text-red-400 border border-red-500/20 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm shrink-0"
+                                        title="За даними постачальника цього номіналу немає в наявності"
+                                      >
+                                        Нема в наявності
                                       </span>
                                     )}
                                     <MultiPlatformSelector
