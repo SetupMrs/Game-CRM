@@ -1026,9 +1026,10 @@ function GgselStandaloneCalculator({
         </button>
       </div>
 
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
       {sourceMode === "catalog" ? (
         !selectedProduct ? (
-          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
             <p className="text-xs text-gray-400">Введи назву товару з розділу "Товари"</p>
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -1067,7 +1068,7 @@ function GgselStandaloneCalculator({
             )}
           </div>
         ) : (
-          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+          <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
             <button
               onClick={() => {
                 setSelectedProduct(null);
@@ -1107,7 +1108,7 @@ function GgselStandaloneCalculator({
           </div>
         )
       ) : !steamWatch ? (
-        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
           <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
           <input
             value={steamInput}
@@ -1128,7 +1129,7 @@ function GgselStandaloneCalculator({
           </button>
         </div>
       ) : (
-        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-md">
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
           <button
             onClick={() => {
               setSteamWatch(null);
@@ -1166,7 +1167,7 @@ function GgselStandaloneCalculator({
       )}
 
       {rows.length > 0 && (
-        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 max-w-2xl">
+        <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 flex-1 w-full lg:max-w-2xl">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {anyNeedsRate && (
               <div>
@@ -1219,6 +1220,7 @@ function GgselStandaloneCalculator({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
