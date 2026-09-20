@@ -980,6 +980,14 @@ function GgselStandaloneCalculator({
   const [steamError, setSteamError] = useState<string | null>(null);
   const [steamWatch, setSteamWatch] = useState<SteamWatchItem | null>(null);
   const [checkedCountries, setCheckedCountries] = useState<Set<string>>(new Set());
+  const [steamQuery, setSteamQuery] = useState("");
+  const [showAddNewSteam, setShowAddNewSteam] = useState(false);
+
+  const steamMatches = (() => {
+    const q = steamQuery.trim().toLowerCase();
+    if (!q) return steamWatches;
+    return steamWatches.filter(w => w.title.toLowerCase().includes(q));
+  })();
 
   const matches = (() => {
     const q = query.trim().toLowerCase();
@@ -1145,24 +1153,78 @@ function GgselStandaloneCalculator({
         )
       ) : !steamWatch ? (
         <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
-          <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
-          <input
-            value={steamInput}
-            onChange={e => setSteamInput(e.target.value)}
-            placeholder="store.steampowered.com/sub/... або id"
-            className={inputClass}
-            onKeyDown={e => {
-              if (e.key === "Enter") handleSteamLookup();
-            }}
-          />
-          {steamError && <p className="text-xs text-red-400">{steamError}</p>}
-          <button
-            onClick={handleSteamLookup}
-            disabled={steamBusy}
-            className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
-          >
-            {steamBusy ? "Шукаю..." : "Знайти"}
-          </button>
+          {!showAddNewSteam ? (
+            <>
+              <p className="text-xs text-gray-400">Пошук серед уже доданих Steam-товарів</p>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  value={steamQuery}
+                  onChange={e => setSteamQuery(e.target.value)}
+                  placeholder="напр. Arma"
+                  className={`${inputClass} pl-8`}
+                />
+              </div>
+              <div className="border border-white/5 rounded-lg overflow-hidden max-h-56 overflow-y-auto divide-y divide-white/5">
+                {steamMatches.length === 0 ? (
+                  <p className="text-xs text-gray-500 px-3 py-3">
+                    {steamWatches.length === 0 ? "Ще немає доданих Steam-товарів." : "Нічого не знайдено."}
+                  </p>
+                ) : (
+                  steamMatches.map(w => (
+                    <button
+                      key={w.packageId}
+                      onClick={() => {
+                        setSteamWatch(w);
+                        setCheckedCountries(new Set());
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/5 cursor-pointer"
+                    >
+                      <span className="text-xs text-white truncate">{w.title}</span>
+                      <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                    </button>
+                  ))
+                )}
+              </div>
+              <button
+                onClick={() => setShowAddNewSteam(true)}
+                className="text-[11px] text-gray-500 hover:text-white cursor-pointer flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> Товару нема в списку — додати новим посиланням
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  setShowAddNewSteam(false);
+                  setSteamError(null);
+                }}
+                className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" /> Назад до пошуку
+              </button>
+              <p className="text-xs text-gray-400">Встав посилання на Steam-товар (sub) або його id</p>
+              <input
+                value={steamInput}
+                onChange={e => setSteamInput(e.target.value)}
+                placeholder="store.steampowered.com/sub/... або id"
+                className={inputClass}
+                onKeyDown={e => {
+                  if (e.key === "Enter") handleSteamLookup();
+                }}
+              />
+              {steamError && <p className="text-xs text-red-400">{steamError}</p>}
+              <button
+                onClick={handleSteamLookup}
+                disabled={steamBusy}
+                className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                {steamBusy ? "Шукаю..." : "Знайти"}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3 w-full lg:w-96 lg:shrink-0">
@@ -1170,6 +1232,7 @@ function GgselStandaloneCalculator({
             onClick={() => {
               setSteamWatch(null);
               setCheckedCountries(new Set());
+              setShowAddNewSteam(false);
             }}
             className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white cursor-pointer"
           >
