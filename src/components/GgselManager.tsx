@@ -413,38 +413,63 @@ export default function GgselManager({
             />
           )}
 
-          {!showPaused && (
-            <GgselGroupCalculator
-              categoryItems={activeCategoryItems}
-              steamWatches={steamWatches}
-              suppliers={suppliers}
-              rubRates={rubRates}
-              categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
-              onSetMainNominal={onSetMainNominal}
-            />
-          )}
-
           {categoryItems.length === 0 && !showAddItem ? (
             <p className="text-xs text-gray-500 py-6 text-center">
               {showPaused ? "Немає призупинених товарів." : "Ще немає товарів у цій категорії."}
             </p>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-              {categoryItems.map(item => (
-                <GgselItemCard
-                  key={item.id}
-                  item={item}
-                  steamWatches={steamWatches}
-                  suppliers={suppliers}
-                  rubRates={rubRates}
-                  categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
-                  onUpdateItem={onUpdateItem}
-                  onSaveItemDetails={onSaveItemDetails}
-                  onRemove={onRemoveItem}
-                  onTogglePaused={onTogglePaused}
-                  onSetMainNominal={onSetMainNominal}
-                />
-              ))}
+              {(() => {
+                // Групуємо номінали одного й того ж товару/пакета в одну
+                // об'єднану картку замість того, щоб розсипати їх окремими
+                // картками по сітці.
+                const groups: Record<string, GgselWatchItem[]> = {};
+                const order: string[] = [];
+                categoryItems.forEach(item => {
+                  const key = ggselGroupKey(item);
+                  if (!groups[key]) {
+                    groups[key] = [];
+                    order.push(key);
+                  }
+                  groups[key].push(item);
+                });
+                return order.map(key => {
+                  const groupItems = groups[key];
+                  if (groupItems.length === 1) {
+                    const item = groupItems[0];
+                    return (
+                      <GgselItemCard
+                        key={item.id}
+                        item={item}
+                        steamWatches={steamWatches}
+                        suppliers={suppliers}
+                        rubRates={rubRates}
+                        categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
+                        onUpdateItem={onUpdateItem}
+                        onSaveItemDetails={onSaveItemDetails}
+                        onRemove={onRemoveItem}
+                        onTogglePaused={onTogglePaused}
+                        onSetMainNominal={onSetMainNominal}
+                      />
+                    );
+                  }
+                  return (
+                    <GgselProductGroupCard
+                      key={key}
+                      items={groupItems}
+                      steamWatches={steamWatches}
+                      suppliers={suppliers}
+                      rubRates={rubRates}
+                      categoryDefaultRate={selectedCategory?.defaultUsdToRubRate}
+                      onUpdateItem={onUpdateItem}
+                      onSaveItemDetails={onSaveItemDetails}
+                      onRemove={onRemoveItem}
+                      onTogglePaused={onTogglePaused}
+                      onSetMainNominal={onSetMainNominal}
+                    />
+                  );
+                });
+              })()}
             </div>
           )}
         </>
@@ -1306,6 +1331,183 @@ function GgselGroupCalculator({
   );
 }
 
+
+// --- Кілька номіналів одного й того ж товару/пакета — одна об'єднана
+// картка замість того, щоб розсипати їх окремими картками по сітці. ------
+
+function GgselProductGroupCard({
+  items,
+  steamWatches,
+  suppliers,
+  rubRates,
+  categoryDefaultRate,
+  onUpdateItem,
+  onSaveItemDetails,
+  onRemove,
+  onTogglePaused,
+  onSetMainNominal
+}: {
+  key?: React.Key;
+  items: GgselWatchItem[];
+  steamWatches: SteamWatchItem[];
+  suppliers: Supplier[];
+  rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
+  onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
+  onSaveItemDetails: (
+    id: string,
+    patch: {
+      title?: string;
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => void;
+  onRemove: (id: string) => void;
+  onTogglePaused: (id: string) => void;
+  onSetMainNominal: (id: string) => void;
+}) {
+  const first = items[0];
+  const isCatalog = first.sourceType === "catalog";
+  const supplier = suppliers.find(s => s.id === first.catalogSupplierId);
+  const product = supplier?.products.find(p => p.id === first.catalogProductId);
+  const watch = steamWatches.find(w => w.packageId === first.steamPackageId);
+  const headerTitle = isCatalog ? product?.title || first.title : watch?.title || first.title;
+  const headerSubtitle = isCatalog ? supplier?.name : "Steam";
+
+  const mainItem = items.find(i => i.isMainNominal) || items[0];
+  const mainPrice = computeItemSuggestedRub(mainItem, steamWatches, suppliers, rubRates, categoryDefaultRate);
+
+  return (
+    <div className="border border-white/5 rounded-xl bg-[#111112] p-4 space-y-3 lg:col-span-2 2xl:col-span-3">
+      <div className="flex items-center gap-3">
+        {!isCatalog && watch?.headerImage && (
+          <img src={watch.headerImage} alt="" className="w-16 h-8 object-cover rounded-md border border-white/10 shrink-0" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-white truncate">{headerTitle}</p>
+          <p className="text-[11px] text-gray-500 flex items-center gap-1">
+            {isCatalog ? <Package className="w-3 h-3" /> : null}
+            {headerSubtitle} · {items.length} номіналів
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-[9px] text-gray-500 uppercase font-bold">Цена товара (база)</p>
+          <p className="text-sm font-mono font-bold text-white">{typeof mainPrice === "number" ? mainPrice.toFixed(2) : "—"} ₽</p>
+        </div>
+      </div>
+
+      <div className="border border-white/5 rounded-lg overflow-hidden divide-y divide-white/5">
+        {items.map(item => (
+          <GgselGroupRow
+            key={item.id}
+            item={item}
+            isMain={item.id === mainItem.id}
+            mainPrice={mainPrice}
+            steamWatches={steamWatches}
+            suppliers={suppliers}
+            rubRates={rubRates}
+            categoryDefaultRate={categoryDefaultRate}
+            onUpdateItem={onUpdateItem}
+            onSaveItemDetails={onSaveItemDetails}
+            onRemove={onRemove}
+            onTogglePaused={onTogglePaused}
+            onSetMainNominal={onSetMainNominal}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GgselGroupRow({
+  item,
+  isMain,
+  mainPrice,
+  steamWatches,
+  suppliers,
+  rubRates,
+  categoryDefaultRate,
+  onUpdateItem,
+  onSaveItemDetails,
+  onRemove,
+  onTogglePaused,
+  onSetMainNominal
+}: {
+  key?: React.Key;
+  item: GgselWatchItem;
+  isMain: boolean;
+  mainPrice: number | undefined;
+  steamWatches: SteamWatchItem[];
+  suppliers: Supplier[];
+  rubRates: Record<string, number>;
+  categoryDefaultRate?: number;
+  onUpdateItem: (id: string, patch: Partial<GgselWatchItem>) => void;
+  onSaveItemDetails: (
+    id: string,
+    patch: {
+      title?: string;
+      ggselPrice?: number;
+      exchangeRate?: number;
+      commission1Percent: number;
+      commission2Percent: number;
+      myMarginPercent: number;
+    }
+  ) => void;
+  onRemove: (id: string) => void;
+  onTogglePaused: (id: string) => void;
+  onSetMainNominal: (id: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const source = resolveGgselPriceSource(item, steamWatches, suppliers);
+  const needsRate = usesManualRate(source.currency, rubRates);
+  const suggested = computeItemSuggestedRub(item, steamWatches, suppliers, rubRates, categoryDefaultRate);
+  const increase = typeof suggested === "number" && typeof mainPrice === "number" ? suggested - mainPrice : undefined;
+  const needsPriceIncrease = typeof suggested === "number" && typeof item.ggselPrice === "number" && suggested - item.ggselPrice > 1;
+
+  return (
+    <div className={`flex items-center justify-between gap-2 px-3 py-2 ${item.isPaused ? "opacity-50" : ""} ${needsPriceIncrease && !item.isPaused ? "bg-amber-500/5" : ""}`}>
+      <button onClick={() => onSetMainNominal(item.id)} className="flex items-center gap-1.5 min-w-0 cursor-pointer text-left">
+        <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
+        <span className="text-xs text-white truncate">{item.title}</span>
+        {item.isPaused && <span className="text-[8px] font-bold uppercase text-amber-400 shrink-0">пауза</span>}
+      </button>
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-[10px] font-mono text-gray-500 w-20 text-right">
+          {typeof source.price === "number" ? `${source.price} ${source.currency}` : "—"}
+        </span>
+        <span className="text-[10px] font-mono text-gray-400 w-16 text-right">
+          {typeof item.ggselPrice === "number" ? `${item.ggselPrice.toFixed(2)}₽` : "—"}
+        </span>
+        <span className={`text-xs font-mono font-bold w-20 text-right ${isMain ? "text-gray-500" : typeof increase === "number" && increase < 0 ? "text-emerald-400" : "text-amber-400"}`}>
+          {isMain ? "база" : typeof increase === "number" ? `${increase > 0 ? "+" : ""}${increase.toFixed(2)}` : "—"}
+        </span>
+        <button onClick={() => onTogglePaused(item.id)} className="p-1 hover:bg-white/5 rounded cursor-pointer" title={item.isPaused ? "Відновити" : "Призупинити"}>
+          {item.isPaused ? <Play className="w-3 h-3 text-emerald-400" /> : <Pause className="w-3 h-3 text-gray-500" />}
+        </button>
+        <button onClick={() => setIsEditing(true)} className="p-1 hover:bg-white/5 rounded cursor-pointer" title="Редагувати">
+          <Pencil className="w-3 h-3 text-gray-500" />
+        </button>
+        <button onClick={() => onRemove(item.id)} className="p-1 hover:bg-white/5 rounded cursor-pointer" title="Прибрати">
+          <X className="w-3.5 h-3.5 text-gray-500" />
+        </button>
+      </div>
+
+      {isEditing && (
+        <EditGgselItemModal
+          item={item}
+          needsRate={needsRate}
+          steamCurrency={source.currency}
+          categoryDefaultRate={categoryDefaultRate}
+          onSaveItemDetails={onSaveItemDetails}
+          onClose={() => setIsEditing(false)}
+        />
+      )}
+    </div>
+  );
+}
 
 function GgselItemCard({
   item,
