@@ -61,7 +61,7 @@ function resolveGgselPriceSource(
   item: GgselWatchItem,
   steamWatches: SteamWatchItem[],
   suppliers: Supplier[]
-): { price?: number; currency: string; priceHistory?: PriceHistoryEntry[]; label: string } {
+): { price?: number; currency: string; priceHistory?: PriceHistoryEntry[]; label: string; inStock?: boolean } {
   if (item.sourceType === "catalog") {
     const supplier = suppliers.find(s => s.id === item.catalogSupplierId);
     const product = supplier?.products.find(p => p.id === item.catalogProductId);
@@ -70,7 +70,8 @@ function resolveGgselPriceSource(
       price: nominal?.price,
       currency: nominal?.currency || product?.currency || "USD",
       priceHistory: nominal?.priceHistory,
-      label: product ? `${product.title}${supplier ? " · " + supplier.name : ""}` : "Товар видалено з каталогу"
+      label: product ? `${product.title}${supplier ? " · " + supplier.name : ""}` : "Товар видалено з каталогу",
+      inStock: nominal?.externalInStock
     };
   }
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
@@ -1397,11 +1398,13 @@ function GgselProductGroupCard({
 
   let upCount = 0;
   let downCount = 0;
+  let outOfStockCount = 0;
   items.forEach(item => {
     const src = resolveGgselPriceSource(item, steamWatches, suppliers);
     const trend = steamPriceTrend(src.price, src.priceHistory?.[0]);
     if (trend === "up") upCount++;
     if (trend === "down") downCount++;
+    if (src.inStock === false && !item.isPaused) outOfStockCount++;
   });
 
   const saveTitle = () => {
@@ -1464,6 +1467,14 @@ function GgselProductGroupCard({
             {headerSubtitle} · {items.length} номіналів
             {upCount > 0 && <span className="text-amber-400 font-mono">↑{upCount}</span>}
             {downCount > 0 && <span className="text-emerald-400 font-mono">↓{downCount}</span>}
+            {outOfStockCount > 0 && (
+              <span
+                className="text-[9px] font-bold uppercase text-red-400 bg-red-500/10 border border-red-500/20 rounded-sm px-1 py-0.5"
+                title="Стільки номіналів немає в наявності за даними LetsKeys"
+              >
+                нема в наявності: {outOfStockCount}
+              </span>
+            )}
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -1548,6 +1559,14 @@ function GgselGroupRow({
         <span className="text-xs text-white truncate">{item.title}</span>
         {priceTrendValue === "up" && <span className="text-amber-400 text-[10px] shrink-0">↑</span>}
         {priceTrendValue === "down" && <span className="text-emerald-400 text-[10px] shrink-0">↓</span>}
+        {source.inStock === false && !item.isPaused && (
+          <span
+            className="text-[8px] font-bold uppercase text-red-400 bg-red-500/10 border border-red-500/20 rounded-sm px-1 py-0.5 shrink-0"
+            title="За даними LetsKeys цього номіналу немає в наявності"
+          >
+            нема в наявності
+          </span>
+        )}
         {item.isPaused && <span className="text-[8px] font-bold uppercase text-amber-400 shrink-0">пауза</span>}
       </button>
       <div className="flex items-center gap-3 shrink-0">
@@ -1661,6 +1680,14 @@ function GgselItemCard({
             {item.isMainNominal && (
               <span className="ml-2 text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-sm px-1.5 py-0.5 align-middle">
                 ★ Головний
+              </span>
+            )}
+            {source.inStock === false && !item.isPaused && (
+              <span
+                className="ml-2 text-[9px] font-bold uppercase text-red-400 bg-red-500/10 border border-red-500/20 rounded-sm px-1.5 py-0.5 align-middle"
+                title="За даними LetsKeys цього номіналу немає в наявності"
+              >
+                Нема в наявності
               </span>
             )}
             {item.isPaused && (
