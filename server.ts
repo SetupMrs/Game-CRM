@@ -1183,7 +1183,7 @@ app.post("/api/steam-watch/sync-one", requireAuth, async (req, res) => {
   }
 });
 
-const STEAM_WATCH_AUTO_SYNC_HOURS = Number(process.env.STEAM_WATCH_AUTO_SYNC_HOURS) || 12;
+const STEAM_WATCH_AUTO_SYNC_HOURS = Number(process.env.STEAM_WATCH_AUTO_SYNC_HOURS) || 4;
 if (STEAM_WATCH_AUTO_SYNC_HOURS > 0) {
   const steamIntervalMs = STEAM_WATCH_AUTO_SYNC_HOURS * 60 * 60 * 1000;
   setTimeout(() => { runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err)); }, 3 * 60 * 1000);
