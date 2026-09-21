@@ -1242,6 +1242,30 @@ export default function App() {
     }
   };
 
+  // Оновлює ціну лише одного конкретного Steam-товару (за packageId) і
+  // одразу підставляє свіжі дані в стан, без чекання фонової синхронізації.
+  const handleSyncOneSteamWatch = async (packageId: string): Promise<{ success: boolean; changed?: boolean; message?: string }> => {
+    try {
+      const res = await apiFetch("/api/steam-watch/sync-one", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packageId })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        return { success: false, message: data?.message || "Не вдалося оновити ціну." };
+      }
+      const updated = {
+        ...db,
+        steamWatches: (db.steamWatches || []).map(w => (w.packageId === packageId ? data.watch : w))
+      };
+      setDb(updated);
+      return { success: true, changed: data.changed };
+    } catch {
+      return { success: false, message: "Не вдалося з'єднатися з сервером." };
+    }
+  };
+
   // --- Калькулятор цін ggsel -------------------------------------------------
 
   const handleAddGgselCategory = (name: string, defaultUsdToRubRate?: number) => {
@@ -2022,6 +2046,7 @@ export default function App() {
                     onTogglePaused={handleToggleGgselItemPaused}
                     onSetMainNominal={handleSetMainNominal}
                     onUpdateGroupTitle={handleUpdateGgselGroupTitle}
+                    onSyncOneSteamWatch={handleSyncOneSteamWatch}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />
                 )}

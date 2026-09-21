@@ -1014,6 +1014,78 @@ app.post("/api/steam-watch/lookup", requireAuth, async (req, res) => {
 
 let isSteamWatchSyncRunning = false;
 
+// Оновлює ціни ОДНОГО товару Steam-спостереження по всіх країнах з
+// канонічного списку. Мутує watch напряму (як у циклі автосинку) і
+// повертає, скільки саме цін реально змінилось.
+async function refreshOneSteamWatch(watch: any, now: string): Promise<{ changed: boolean; priceChangedCount: number }> {
+  const existingByCountry: Record<string, any> = {};
+  (watch.prices || []).forEach((entry: any) => {
+    existingByCountry[entry.countryCode] = entry;
+  });
+
+  const results = await fetchSteamPricesForCountries(watch.packageId, STEAM_WATCH_COUNTRIES);
+
+  let priceChangedCount = 0;
+  let watchChanged = false;
+  const updatedPrices: any[] = [];
+  for (const country of STEAM_WATCH_COUNTRIES) {
+    const entry = existingByCountry[country.code];
+    const result = results.get(country.code);
+
+    if (!entry) {
+      if (result && typeof result.price === "number") {
+        updatedPrices.push({
+          id: `${watch.packageId}-${country.code}`,
+          countryCode: country.code,
+          currency: result.currency,
+          price: result.price,
+          priceHistory: []
+        });
+        watchChanged = true;
+      }
+      continue;
+    }
+
+    if (!result || typeof result.price !== "number") {
+      updatedPrices.push(entry);
+      continue;
+    }
+
+    if (typeof entry.price === "number" && entry.price !== result.price) {
+      const historyEntry = {
+        id: crypto.randomUUID(),
+        price: entry.price,
+        currency: entry.currency,
+        changedAt: now
+      };
+      updatedPrices.push({
+        ...entry,
+        price: result.price,
+        currency: result.currency || entry.currency,
+        priceHistory: [historyEntry, ...(entry.priceHistory || [])].slice(0, 50)
+      });
+      priceChangedCount++;
+      watchChanged = true;
+    } else if (typeof entry.price !== "number") {
+      updatedPrices.push({ ...entry, price: result.price, currency: result.currency || entry.currency });
+      watchChanged = true;
+    } else {
+      updatedPrices.push(entry);
+    }
+  }
+
+  const currentOrder = (watch.prices || []).map((e: any) => e.countryCode).join(",");
+  const newOrder = updatedPrices.map((e: any) => e.countryCode).join(",");
+  if (newOrder !== currentOrder) watchChanged = true;
+
+  if (watchChanged) {
+    watch.prices = updatedPrices;
+    watch.lastSyncedAt = now;
+  }
+
+  return { changed: watchChanged, priceChangedCount };
+}
+
 async function runSteamWatchAutoSync() {
   if (isSteamWatchSyncRunning) {
     console.log("[SteamWatch] Попередній запуск ще триває, пропускаю.");
@@ -1035,76 +1107,9 @@ async function runSteamWatchAutoSync() {
     console.log(`[SteamWatch] Початок синхронізації цін Steam (${watches.length} товар(ів))...`);
 
     for (const watch of watches) {
-      let watchChanged = false;
-      const existingByCountry: Record<string, any> = {};
-      (watch.prices || []).forEach((entry: any) => {
-        existingByCountry[entry.countryCode] = entry;
-      });
-
-      // Fetch every country from the canonical list — this both refreshes
-      // already-tracked countries and backfills any that were added to
-      // STEAM_WATCH_COUNTRIES after this item was first watched.
-      const results = await fetchSteamPricesForCountries(watch.packageId, STEAM_WATCH_COUNTRIES);
-
-      const updatedPrices: any[] = [];
-      for (const country of STEAM_WATCH_COUNTRIES) {
-        const entry = existingByCountry[country.code];
-        const result = results.get(country.code);
-
-        if (!entry) {
-          // New country for this item — add it if Steam actually has a price.
-          if (result && typeof result.price === "number") {
-            updatedPrices.push({
-              id: `${watch.packageId}-${country.code}`,
-              countryCode: country.code,
-              currency: result.currency,
-              price: result.price,
-              priceHistory: []
-            });
-            watchChanged = true;
-          }
-          continue;
-        }
-
-        if (!result || typeof result.price !== "number") {
-          updatedPrices.push(entry);
-          continue;
-        }
-
-        if (typeof entry.price === "number" && entry.price !== result.price) {
-          const historyEntry = {
-            id: crypto.randomUUID(),
-            price: entry.price,
-            currency: entry.currency,
-            changedAt: now
-          };
-          updatedPrices.push({
-            ...entry,
-            price: result.price,
-            currency: result.currency || entry.currency,
-            priceHistory: [historyEntry, ...(entry.priceHistory || [])].slice(0, 50)
-          });
-          priceChangedCount++;
-          watchChanged = true;
-        } else if (typeof entry.price !== "number") {
-          updatedPrices.push({ ...entry, price: result.price, currency: result.currency || entry.currency });
-          watchChanged = true;
-        } else {
-          updatedPrices.push(entry);
-        }
-      }
-
-      // Re-ordering to match STEAM_WATCH_COUNTRIES (RU first) counts as a
-      // change too, even with no price movement, so the UI order stays correct.
-      const currentOrder = (watch.prices || []).map((e: any) => e.countryCode).join(",");
-      const newOrder = updatedPrices.map((e: any) => e.countryCode).join(",");
-      if (newOrder !== currentOrder) watchChanged = true;
-
-      if (watchChanged) {
-        watch.prices = updatedPrices;
-        watch.lastSyncedAt = now;
-        itemsTouched++;
-      }
+      const result = await refreshOneSteamWatch(watch, now);
+      if (result.changed) itemsTouched++;
+      priceChangedCount += result.priceChangedCount;
     }
 
     if (itemsTouched > 0) {
@@ -1140,6 +1145,42 @@ async function runSteamWatchAutoSync() {
 app.post("/api/steam-watch/sync-now", requireAuth, (req, res) => {
   runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err));
   res.json({ status: "success", message: "Синхронізацію запущено у фоні." });
+});
+
+// Оновлює ціну ОДНОГО конкретного товару Steam-спостереження (за packageId)
+// прямо зараз і синхронно повертає результат.
+app.post("/api/steam-watch/sync-one", requireAuth, async (req, res) => {
+  const packageId = String(req.body?.packageId || "");
+  if (!packageId) {
+    return res.status(400).json({ status: "error", message: "Не вказано packageId." });
+  }
+  if (isSteamWatchSyncRunning) {
+    return res.status(409).json({ status: "error", message: "Триває повна синхронізація — спробуй за хвилину." });
+  }
+  isSteamWatchSyncRunning = true;
+  try {
+    const db = readDb();
+    const watch = (db.steamWatches || []).find((w: any) => w.packageId === packageId);
+    if (!watch) {
+      return res.status(404).json({ status: "error", message: "Товар не знайдено у спостереженні." });
+    }
+    const now = new Date().toISOString();
+    const result = await refreshOneSteamWatch(watch, now);
+
+    if (result.changed) {
+      const writeResult = writeDb(db, false);
+      if (!writeResult.success) {
+        return res.status(500).json({ status: "error", message: "Не вдалося зберегти оновлену ціну." });
+      }
+    }
+
+    res.json({ status: "success", changed: result.changed, priceChangedCount: result.priceChangedCount, watch });
+  } catch (error) {
+    console.error("[SteamWatch] sync-one failed:", error);
+    res.status(500).json({ status: "error", message: "Не вдалося оновити ціну." });
+  } finally {
+    isSteamWatchSyncRunning = false;
+  }
 });
 
 const STEAM_WATCH_AUTO_SYNC_HOURS = Number(process.env.STEAM_WATCH_AUTO_SYNC_HOURS) || 12;

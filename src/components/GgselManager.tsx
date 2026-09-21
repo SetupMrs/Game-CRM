@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { GgselCategory, GgselWatchItem, SteamWatchItem, PriceHistoryEntry, Supplier, ProductCard, CategoryItem } from "../types";
 import { computeGgselSuggestedPrice } from "../utils";
 import { apiFetch } from "../apiClient";
-import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package, Pause, Play, Star, Calculator } from "lucide-react";
+import { Plus, X, Check, Trash2, AlertTriangle, Pencil, Search, ChevronRight, ArrowLeft, Package, Pause, Play, Star, Calculator, RefreshCw } from "lucide-react";
 
 const STEAM_COUNTRY_LABELS: Record<string, string> = {
   ru: "Росія", ua: "Україна", kz: "Казахстан", by: "Білорусь", us: "США", gb: "Британія",
@@ -41,6 +41,7 @@ interface GgselManagerProps {
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
   onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
+  onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
 
@@ -160,6 +161,7 @@ export default function GgselManager({
   onTogglePaused,
   onSetMainNominal,
   onUpdateGroupTitle,
+  onSyncOneSteamWatch,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(categories[0]?.id || null);
@@ -460,6 +462,7 @@ export default function GgselManager({
                         onRemove={onRemoveItem}
                         onTogglePaused={onTogglePaused}
                         onSetMainNominal={onSetMainNominal}
+                        onSyncOneSteamWatch={onSyncOneSteamWatch}
                       />
                     );
                   }
@@ -477,6 +480,7 @@ export default function GgselManager({
                       onTogglePaused={onTogglePaused}
                       onSetMainNominal={onSetMainNominal}
                       onUpdateGroupTitle={onUpdateGroupTitle}
+                      onSyncOneSteamWatch={onSyncOneSteamWatch}
                     />
                   );
                 });
@@ -1420,7 +1424,8 @@ function GgselProductGroupCard({
   onRemove,
   onTogglePaused,
   onSetMainNominal,
-  onUpdateGroupTitle
+  onUpdateGroupTitle,
+  onSyncOneSteamWatch
 }: {
   key?: React.Key;
   items: GgselWatchItem[];
@@ -1444,6 +1449,7 @@ function GgselProductGroupCard({
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
   onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
+  onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
 }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const first = items[0];
@@ -1562,6 +1568,7 @@ function GgselProductGroupCard({
             onRemove={onRemove}
             onTogglePaused={onTogglePaused}
             onSetMainNominal={onSetMainNominal}
+            onSyncOneSteamWatch={onSyncOneSteamWatch}
           />
         ))}
       </div>
@@ -1581,7 +1588,8 @@ function GgselGroupRow({
   onSaveItemDetails,
   onRemove,
   onTogglePaused,
-  onSetMainNominal
+  onSetMainNominal,
+  onSyncOneSteamWatch
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -1606,8 +1614,17 @@ function GgselGroupRow({
   onRemove: (id: string) => void;
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
+  onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const isCatalog = item.sourceType === "catalog";
+  const handleSyncPrice = async () => {
+    if (!item.steamPackageId || isSyncing) return;
+    setIsSyncing(true);
+    await onSyncOneSteamWatch(item.steamPackageId);
+    setIsSyncing(false);
+  };
   const source = resolveGgselPriceSource(item, steamWatches, suppliers);
   const needsRate = usesManualRate(source.currency, rubRates);
   const suggested = computeItemSuggestedRub(item, steamWatches, suppliers, rubRates, categoryDefaultRate);
@@ -1642,6 +1659,16 @@ function GgselGroupRow({
         <span className={`text-xs font-mono font-bold w-20 text-right ${isMain ? "text-gray-500" : typeof increase === "number" && increase < 0 ? "text-emerald-400" : "text-amber-400"}`}>
           {isMain ? "база" : typeof increase === "number" ? `${increase > 0 ? "+" : ""}${increase.toFixed(2)}` : "—"}
         </span>
+        {!isCatalog && (
+          <button
+            onClick={handleSyncPrice}
+            disabled={isSyncing}
+            className="p-1 hover:bg-white/5 rounded cursor-pointer disabled:opacity-50"
+            title="Оновити ціну Steam для цього номіналу зараз"
+          >
+            <RefreshCw className={`w-3 h-3 text-gray-500 ${isSyncing ? "animate-spin" : ""}`} />
+          </button>
+        )}
         <button onClick={() => onTogglePaused(item.id)} className="p-1 hover:bg-white/5 rounded cursor-pointer" title={item.isPaused ? "Відновити" : "Призупинити"}>
           {item.isPaused ? <Play className="w-3 h-3 text-emerald-400" /> : <Pause className="w-3 h-3 text-gray-500" />}
         </button>
@@ -1677,7 +1704,8 @@ function GgselItemCard({
   onSaveItemDetails,
   onRemove,
   onTogglePaused,
-  onSetMainNominal
+  onSetMainNominal,
+  onSyncOneSteamWatch
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -1700,9 +1728,18 @@ function GgselItemCard({
   onRemove: (id: string) => void;
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
+  onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const isCatalog = item.sourceType === "catalog";
+
+  const handleSyncPrice = async () => {
+    if (!item.steamPackageId || isSyncing) return;
+    setIsSyncing(true);
+    await onSyncOneSteamWatch(item.steamPackageId);
+    setIsSyncing(false);
+  };
 
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
   const source = resolveGgselPriceSource(item, steamWatches, suppliers);
@@ -1787,6 +1824,16 @@ function GgselItemCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {!isCatalog && (
+            <button
+              onClick={handleSyncPrice}
+              disabled={isSyncing}
+              className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer disabled:opacity-50"
+              title="Оновити ціну Steam для цього товару зараз"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${isSyncing ? "animate-spin" : ""}`} />
+            </button>
+          )}
           <button
             onClick={() => onSetMainNominal(item.id)}
             className="p-1.5 hover:bg-white/5 rounded-lg cursor-pointer"
