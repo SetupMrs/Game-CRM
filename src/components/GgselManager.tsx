@@ -1452,6 +1452,7 @@ function GgselProductGroupCard({
   onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
 }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const first = items[0];
   const isCatalog = first.sourceType === "catalog";
   const supplier = suppliers.find(s => s.id === first.catalogSupplierId);
@@ -1484,6 +1485,13 @@ function GgselProductGroupCard({
   return (
     <div className="border border-white/5 rounded-xl bg-[#111112] p-4 space-y-3 lg:col-span-2 2xl:col-span-3">
       <div className="flex items-center gap-3">
+        <button
+          onClick={() => setIsExpanded(v => !v)}
+          className="p-1 hover:bg-white/5 rounded-lg cursor-pointer shrink-0"
+          title={isExpanded ? "Згорнути номінали" : "Розгорнути номінали"}
+        >
+          <ChevronRight className={`w-4 h-4 text-gray-500 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+        </button>
         {!isCatalog && watch?.headerImage && (
           <img src={watch.headerImage} alt="" className="w-16 h-8 object-cover rounded-md border border-white/10 shrink-0" />
         )}
@@ -1552,6 +1560,7 @@ function GgselProductGroupCard({
         </div>
       </div>
 
+      {isExpanded && (
       <div className="border border-white/5 rounded-lg overflow-hidden divide-y divide-white/5">
         {items.map(item => (
           <GgselGroupRow
@@ -1572,6 +1581,7 @@ function GgselProductGroupCard({
           />
         ))}
       </div>
+      )}
     </div>
   );
 }
