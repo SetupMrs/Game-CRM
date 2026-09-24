@@ -1266,6 +1266,33 @@ export default function App() {
     }
   };
 
+  // Заповнює регіони (напр. RU), яких офіційний Steam API не видає для
+  // конкретної гри, ціною з LetsKeys (perevirka по sub_id). Асинхронна
+  // перевірка на боці LetsKeys може зайняти до ~30с.
+  const handleFillMissingWithLetsKeys = async (
+    packageId: string
+  ): Promise<{ success: boolean; addedCount?: number; updatedCount?: number; message?: string }> => {
+    try {
+      const res = await apiFetch("/api/steam-watch/fill-missing-with-letskeys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packageId })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        return { success: false, message: data?.message || "Не вдалося перевірити ціни через LetsKeys." };
+      }
+      const updated = {
+        ...db,
+        steamWatches: (db.steamWatches || []).map(w => (w.packageId === packageId ? data.watch : w))
+      };
+      setDb(updated);
+      return { success: true, addedCount: data.addedCount, updatedCount: data.updatedCount };
+    } catch {
+      return { success: false, message: "Не вдалося з'єднатися з сервером." };
+    }
+  };
+
   // --- Калькулятор цін ggsel -------------------------------------------------
 
   const handleAddGgselCategory = (name: string, defaultUsdToRubRate?: number) => {
@@ -2047,6 +2074,7 @@ export default function App() {
                     onSetMainNominal={handleSetMainNominal}
                     onUpdateGroupTitle={handleUpdateGgselGroupTitle}
                     onSyncOneSteamWatch={handleSyncOneSteamWatch}
+                    onFillMissingWithLetsKeys={handleFillMissingWithLetsKeys}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
                   />
                 )}

@@ -42,6 +42,7 @@ interface GgselManagerProps {
   onSetMainNominal: (id: string) => void;
   onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
   onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
+  onFillMissingWithLetsKeys: (packageId: string) => Promise<{ success: boolean; addedCount?: number; updatedCount?: number; message?: string }>;
   onLookupOrAddSteamWatch: (input: string) => Promise<{ success: boolean; message?: string; watch?: SteamWatchItem }>;
 }
 
@@ -162,6 +163,7 @@ export default function GgselManager({
   onSetMainNominal,
   onUpdateGroupTitle,
   onSyncOneSteamWatch,
+  onFillMissingWithLetsKeys,
   onLookupOrAddSteamWatch
 }: GgselManagerProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(categories[0]?.id || null);
@@ -463,6 +465,7 @@ export default function GgselManager({
                         onTogglePaused={onTogglePaused}
                         onSetMainNominal={onSetMainNominal}
                         onSyncOneSteamWatch={onSyncOneSteamWatch}
+                        onFillMissingWithLetsKeys={onFillMissingWithLetsKeys}
                       />
                     );
                   }
@@ -481,6 +484,7 @@ export default function GgselManager({
                       onSetMainNominal={onSetMainNominal}
                       onUpdateGroupTitle={onUpdateGroupTitle}
                       onSyncOneSteamWatch={onSyncOneSteamWatch}
+                      onFillMissingWithLetsKeys={onFillMissingWithLetsKeys}
                     />
                   );
                 });
@@ -1425,7 +1429,8 @@ function GgselProductGroupCard({
   onTogglePaused,
   onSetMainNominal,
   onUpdateGroupTitle,
-  onSyncOneSteamWatch
+  onSyncOneSteamWatch,
+  onFillMissingWithLetsKeys
 }: {
   key?: React.Key;
   items: GgselWatchItem[];
@@ -1450,6 +1455,7 @@ function GgselProductGroupCard({
   onSetMainNominal: (id: string) => void;
   onUpdateGroupTitle: (itemIds: string[], newTitle: string) => void;
   onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
+  onFillMissingWithLetsKeys: (packageId: string) => Promise<{ success: boolean; addedCount?: number; updatedCount?: number; message?: string }>;
 }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -1578,6 +1584,7 @@ function GgselProductGroupCard({
             onTogglePaused={onTogglePaused}
             onSetMainNominal={onSetMainNominal}
             onSyncOneSteamWatch={onSyncOneSteamWatch}
+            onFillMissingWithLetsKeys={onFillMissingWithLetsKeys}
           />
         ))}
       </div>
@@ -1599,7 +1606,8 @@ function GgselGroupRow({
   onRemove,
   onTogglePaused,
   onSetMainNominal,
-  onSyncOneSteamWatch
+  onSyncOneSteamWatch,
+  onFillMissingWithLetsKeys
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -1625,6 +1633,7 @@ function GgselGroupRow({
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
   onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
+  onFillMissingWithLetsKeys: (packageId: string) => Promise<{ success: boolean; addedCount?: number; updatedCount?: number; message?: string }>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -1715,7 +1724,8 @@ function GgselItemCard({
   onRemove,
   onTogglePaused,
   onSetMainNominal,
-  onSyncOneSteamWatch
+  onSyncOneSteamWatch,
+  onFillMissingWithLetsKeys
 }: {
   key?: React.Key;
   item: GgselWatchItem;
@@ -1739,10 +1749,26 @@ function GgselItemCard({
   onTogglePaused: (id: string) => void;
   onSetMainNominal: (id: string) => void;
   onSyncOneSteamWatch: (packageId: string) => Promise<{ success: boolean; changed?: boolean; message?: string }>;
+  onFillMissingWithLetsKeys: (packageId: string) => Promise<{ success: boolean; addedCount?: number; updatedCount?: number; message?: string }>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isFillingLetsKeys, setIsFillingLetsKeys] = useState(false);
+  const [letsKeysMessage, setLetsKeysMessage] = useState<string | null>(null);
   const isCatalog = item.sourceType === "catalog";
+
+  const handleFillMissingWithLetsKeys = async () => {
+    if (!item.steamPackageId || isFillingLetsKeys) return;
+    setIsFillingLetsKeys(true);
+    setLetsKeysMessage(null);
+    const result = await onFillMissingWithLetsKeys(item.steamPackageId);
+    setIsFillingLetsKeys(false);
+    setLetsKeysMessage(
+      result.success
+        ? `Готово: додано ${result.addedCount || 0}, оновлено ${result.updatedCount || 0}.`
+        : result.message || "Не вдалося перевірити через LetsKeys."
+    );
+  };
 
   const handleSyncPrice = async () => {
     if (!item.steamPackageId || isSyncing) return;
@@ -1827,11 +1853,22 @@ function GgselItemCard({
                       </option>
                     ))}
                 </select>
+                {!(watch?.prices || []).some(p => p.countryCode === "ru" && typeof p.price === "number") && (
+                  <button
+                    onClick={handleFillMissingWithLetsKeys}
+                    disabled={isFillingLetsKeys}
+                    className="text-[10px] text-indigo-300 hover:text-indigo-200 underline cursor-pointer disabled:opacity-50"
+                    title="Steam не видає ціну RU для цієї гри — спробувати перевірити через LetsKeys"
+                  >
+                    {isFillingLetsKeys ? "Перевіряю RU через LetsKeys (до 30с)..." : "Немає RU — перевірити через LetsKeys"}
+                  </button>
+                )}
               </>
             )}
             {priceTrendValue === "up" && <span className="text-amber-400 text-[11px]">↑ подорожчав</span>}
             {priceTrendValue === "down" && <span className="text-emerald-400 text-[11px]">↓ подешевшав</span>}
           </div>
+          {letsKeysMessage && <p className="text-[10px] text-gray-500 mt-0.5">{letsKeysMessage}</p>}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {!isCatalog && (

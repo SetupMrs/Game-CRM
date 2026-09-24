@@ -702,6 +702,108 @@ app.post("/api/db", requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// LetsKeys "Steam Gift" price probe — заповнює регіони (напр. RU), яких
+// офіційний Steam Store API не видає для конкретної гри взагалі, але які
+// LetsKeys все одно вміє перевірити зі свого боку. Працює асинхронно:
+// POST ставить запит у чергу, GET за request_id — опитуємо, поки не
+// з'явиться результат (запасний канал замість вебхука).
+// ---------------------------------------------------------------------------
+async function checkLetsKeysSteamGiftPrices(subId: string, apiKey: string): Promise<Record<string, number> | null> {
+  try {
+    const postRes = await fetch(`${LETSKEYS_BASE_URL}/steam-gift/check-prices`, {
+      method: "POST",
+      headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ sub_id: Number(subId) }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!postRes.ok) return null;
+    const postData: any = await postRes.json();
+    const requestId = postData?.request_id;
+    if (!requestId) return null;
+
+    // Опитуємо запасний канал кожні 2с — зазвичай ціни вже в кеші й
+    // приходять за секунди, тож 30с з запасом покриває типовий випадок.
+    const maxAttempts = 15;
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const getRes = await fetch(`${LETSKEYS_BASE_URL}/steam-gift/check-prices/${encodeURIComponent(requestId)}`, {
+        headers: { "X-API-Key": apiKey },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!getRes.ok) continue;
+      const getData: any = await getRes.json();
+      if ((getData?.status === "success" || getData?.status === "delivery_failed") && getData?.prices) {
+        return getData.prices;
+      }
+      if (getData?.status === "probe_failed") return null;
+      // status === "pending" — пробуємо ще раз
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req, res) => {
+  const packageId = String(req.body?.packageId || "");
+  if (!packageId) {
+    return res.status(400).json({ status: "error", message: "Не вказано packageId." });
+  }
+  const apiKey = process.env.LETSKEYS_API_KEY;
+  if (!apiKey) {
+    return res.status(400).json({ status: "error", message: "LETSKEYS_API_KEY не налаштовано в .env на сервері." });
+  }
+
+  const db = readDb();
+  const watch = (db.steamWatches || []).find((w: any) => w.packageId === packageId);
+  if (!watch) {
+    return res.status(404).json({ status: "error", message: "Товар не знайдено у спостереженні." });
+  }
+
+  const prices = await checkLetsKeysSteamGiftPrices(packageId, apiKey);
+  if (!prices) {
+    return res.status(502).json({
+      status: "error",
+      message: "LetsKeys не зміг перевірити ціни для цього товару (можливо, гра недоступна в жодному регіоні, або перевірка не завершилась вчасно — спробуй ще раз)."
+    });
+  }
+
+  const now = new Date().toISOString();
+  const existingByCountry: Record<string, any> = {};
+  (watch.prices || []).forEach((entry: any) => {
+    existingByCountry[entry.countryCode] = entry;
+  });
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  for (const [countryCode, usdPrice] of Object.entries(prices)) {
+    if (typeof usdPrice !== "number") continue;
+    const existing = existingByCountry[countryCode];
+    if (!existing) {
+      const newEntry = { id: `${packageId}-${countryCode}`, countryCode, currency: "USD", price: usdPrice, priceHistory: [] };
+      watch.prices = [...(watch.prices || []), newEntry];
+      existingByCountry[countryCode] = newEntry;
+      addedCount++;
+    } else if (existing.currency === "USD" && typeof existing.price === "number" && existing.price !== usdPrice) {
+      // Оновлюємо лише "як до як" — не переписуємо офіційну ціну Steam у
+      // місцевій валюті даними з LetsKeys (у USD).
+      const historyEntry = { id: crypto.randomUUID(), price: existing.price, currency: existing.currency, changedAt: now };
+      existing.price = usdPrice;
+      existing.priceHistory = [historyEntry, ...(existing.priceHistory || [])].slice(0, 50);
+      updatedCount++;
+    }
+  }
+  watch.lastSyncedAt = now;
+
+  const writeResult = writeDb(db, false);
+  if (!writeResult.success) {
+    return res.status(500).json({ status: "error", message: "Не вдалося зберегти оновлений товар." });
+  }
+
+  res.json({ status: "success", addedCount, updatedCount, watch });
+});
+
+// ---------------------------------------------------------------------------
 // LetsKeys automatic price sync (background job)
 // ---------------------------------------------------------------------------
 // Re-fetches variations for every already-synced product (matched by its
