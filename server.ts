@@ -1113,49 +1113,29 @@ app.post("/api/steam-watch/lookup", requireAuth, async (req, res) => {
     });
   }
 
-  // Якщо офіційний Steam API не дав жодної ціни (напр. регіонально обмежений
-  // DLC, якого немає в жодному з наших регіонів) — пробуємо LetsKeys як
-  // запасне джерело: у нього часто є ru/ua/kz/cis навіть для таких паків.
-  if (!title || prices.filter(p => typeof p.price === "number").length === 0) {
-    const apiKey = process.env.LETSKEYS_API_KEY;
-    if (apiKey) {
-      const lkPrices = await checkLetsKeysSteamGiftPrices(packageId, apiKey);
-      if (lkPrices && Object.keys(lkPrices).length > 0) {
-        const lkResultPrices = STEAM_WATCH_COUNTRIES
-          .filter(c => typeof lkPrices[c.code] === "number")
-          .map(c => ({
-            id: `${packageId}-${c.code}`,
-            countryCode: c.code,
-            currency: "USD",
-            price: lkPrices[c.code],
-            priceHistory: []
-          }));
-        // LetsKeys повертає country-коди на кшталт "cis", яких немає в нашому
-        // STEAM_WATCH_COUNTRIES — додамо і їх, щоб нічого не втратити.
-        for (const [code, price] of Object.entries(lkPrices)) {
-          if (typeof price === "number" && !lkResultPrices.some(p => p.countryCode === code)) {
-            lkResultPrices.push({ id: `${packageId}-${code}`, countryCode: code, currency: "USD", price, priceHistory: [] });
-          }
-        }
-        if (lkResultPrices.length > 0) {
-          return res.json({
-            status: "success",
-            packageId,
-            title: title || `Steam package #${packageId}`,
-            headerImage,
-            prices: lkResultPrices,
-            source: "letskeys"
-          });
-        }
+  // Завжди пробуємо LetsKeys — він доповнює регіони, яких немає в офіційних
+  // даних Steam (найчастіше RU/СНД), а якщо Steam взагалі нічого не дав, він
+  // стає єдиним джерелом. Уже наявні ціни Steam (у місцевій валюті) ми не
+  // чіпаємо — тільки додаємо відсутні регіони (ціни LetsKeys у USD).
+  const apiKey = process.env.LETSKEYS_API_KEY;
+  if (apiKey) {
+    const lkPrices = await checkLetsKeysSteamGiftPrices(packageId, apiKey);
+    if (lkPrices) {
+      const haveCountry = new Set(prices.filter(p => typeof p.price === "number").map(p => p.countryCode));
+      for (const [code, price] of Object.entries(lkPrices)) {
+        if (typeof price !== "number") continue;
+        if (haveCountry.has(code)) continue; // Steam уже дав цей регіон — не перезаписуємо
+        prices.push({ id: `${packageId}-${code}`, countryCode: code, currency: "USD", price, priceHistory: [] });
       }
     }
   }
 
-  if (!title) {
+  const hasAnyPrice = prices.filter(p => typeof p.price === "number").length > 0;
+  if (!title && !hasAnyPrice) {
     return res.status(404).json({ status: "error", message: "Ні Steam, ні LetsKeys не знайшли такий package (перевір посилання/id)." });
   }
 
-  res.json({ status: "success", packageId, title, headerImage, prices });
+  res.json({ status: "success", packageId, title: title || `Steam package #${packageId}`, headerImage, prices });
 });
 
 let isSteamWatchSyncRunning = false;
