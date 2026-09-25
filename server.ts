@@ -735,11 +735,14 @@ async function checkLetsKeysSteamGiftPrices(subId: string, apiKey: string): Prom
       });
       if (!getRes.ok) continue;
       const getData: any = await getRes.json();
-      if ((getData?.status === "success" || getData?.status === "delivery_failed") && getData?.prices) {
+      // Ціни можуть приходити вже на статусі "pending" (probe завершився
+      // раніше, ніж дійшов вебхук) — забираємо їх щойно вони є, незалежно
+      // від статусу.
+      if (getData?.prices && Object.keys(getData.prices).length > 0) {
         return getData.prices;
       }
       if (getData?.status === "probe_failed") return null;
-      // status === "pending" — пробуємо ще раз
+      // немає цін ще — пробуємо ще раз
     }
     return null;
   } catch {
@@ -1110,8 +1113,46 @@ app.post("/api/steam-watch/lookup", requireAuth, async (req, res) => {
     });
   }
 
+  // Якщо офіційний Steam API не дав жодної ціни (напр. регіонально обмежений
+  // DLC, якого немає в жодному з наших регіонів) — пробуємо LetsKeys як
+  // запасне джерело: у нього часто є ru/ua/kz/cis навіть для таких паків.
+  if (!title || prices.filter(p => typeof p.price === "number").length === 0) {
+    const apiKey = process.env.LETSKEYS_API_KEY;
+    if (apiKey) {
+      const lkPrices = await checkLetsKeysSteamGiftPrices(packageId, apiKey);
+      if (lkPrices && Object.keys(lkPrices).length > 0) {
+        const lkResultPrices = STEAM_WATCH_COUNTRIES
+          .filter(c => typeof lkPrices[c.code] === "number")
+          .map(c => ({
+            id: `${packageId}-${c.code}`,
+            countryCode: c.code,
+            currency: "USD",
+            price: lkPrices[c.code],
+            priceHistory: []
+          }));
+        // LetsKeys повертає country-коди на кшталт "cis", яких немає в нашому
+        // STEAM_WATCH_COUNTRIES — додамо і їх, щоб нічого не втратити.
+        for (const [code, price] of Object.entries(lkPrices)) {
+          if (typeof price === "number" && !lkResultPrices.some(p => p.countryCode === code)) {
+            lkResultPrices.push({ id: `${packageId}-${code}`, countryCode: code, currency: "USD", price, priceHistory: [] });
+          }
+        }
+        if (lkResultPrices.length > 0) {
+          return res.json({
+            status: "success",
+            packageId,
+            title: title || `Steam package #${packageId}`,
+            headerImage,
+            prices: lkResultPrices,
+            source: "letskeys"
+          });
+        }
+      }
+    }
+  }
+
   if (!title) {
-    return res.status(404).json({ status: "error", message: "Steam не знайшов такий package (перевір посилання/id)." });
+    return res.status(404).json({ status: "error", message: "Ні Steam, ні LetsKeys не знайшли такий package (перевір посилання/id)." });
   }
 
   res.json({ status: "success", packageId, title, headerImage, prices });
