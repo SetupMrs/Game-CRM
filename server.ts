@@ -710,10 +710,13 @@ app.post("/api/db", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 async function checkLetsKeysSteamGiftPrices(subId: string, apiKey: string): Promise<Record<string, number> | null> {
   try {
+    // LetsKeys вимагає webhook_url навіть попри те, що є запасний GET-канал
+    // за request_id. Передаємо валідну HTTPS-заглушку (нам вебхук не потрібен —
+    // ми опитуємо результат самі нижче), щоб запит було прийнято.
     const postRes = await fetch(`${LETSKEYS_BASE_URL}/steam-gift/check-prices`, {
       method: "POST",
       headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ sub_id: Number(subId) }),
+      body: JSON.stringify({ sub_id: Number(subId), webhook_url: "https://example.com/steam-gift-webhook-unused" }),
       signal: AbortSignal.timeout(15000)
     });
     if (!postRes.ok) return null;
