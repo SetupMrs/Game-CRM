@@ -164,7 +164,7 @@ export default function Dashboard({
     
     // 1. Financial transactions within period
     const filteredTx = (transactions || []).filter(tx => {
-      if (tx.conversion) return false; // конвертації валюти не входять у звіт доходів/витрат
+      if (tx.conversion || tx.balanceAdjustment) return false; // конвертації та коригування балансу не входять у звіт
       const txDateStr = tx.date.substring(0, 10); // YYYY-MM-DD
       return txDateStr >= start && txDateStr <= end;
     });
@@ -172,7 +172,7 @@ export default function Dashboard({
     let incomeSum = 0;
     let expenseSum = 0;
     filteredTx.forEach(tx => {
-      if (tx.conversion) return; // конвертація валюти — не дохід/витрата
+      if (tx.conversion || tx.balanceAdjustment) return; // конвертація/коригування балансу — не дохід/витрата
       const amount = Number(tx.amount) || 0;
       if (tx.type === "Income") {
         incomeSum += amount;
@@ -242,7 +242,7 @@ export default function Dashboard({
     let totalExpense = 0;
 
     transactions.forEach(tx => {
-      if (tx.conversion) return; // конвертація валюти — не дохід/витрата
+      if (tx.conversion || tx.balanceAdjustment) return; // конвертація/коригування балансу — не дохід/витрата
       const amount = Number(tx.amount) || 0;
       if (tx.type === "Income") {
         totalIncome += amount;

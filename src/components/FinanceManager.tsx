@@ -90,6 +90,11 @@ export default function FinanceManager({
 
   // Чи операція є конвертацією валюти (не звичайний дохід/витрата).
   const isConversion = (tx: Transaction): boolean => !!tx.conversion;
+  // Чи операція — коригування балансу (фіксація наявного залишку, не заробіток).
+  const isBalanceAdjustment = (tx: Transaction): boolean => !!tx.balanceAdjustment;
+  // Операції, які НЕ входять у підсумки доходів/витрат (конвертація + коригування).
+  const isNonPL = (tx: Transaction): boolean => isConversion(tx) || isBalanceAdjustment(tx);
+  const BALANCE_ADJUST_CATEGORY = "Коригування балансу";
 
   // id → ім'я користувача, для підписів рахунків у списку та на картках.
   const userNameById = useMemo(() => {
@@ -311,6 +316,72 @@ export default function FinanceManager({
     return t / f;
   })();
 
+  // --- Встановити / скоригувати баланс рахунку ---------------------------------
+  // Поточний обчислений баланс рахунку в конкретній валюті (те, що видно на картці).
+  const currentBalanceFor = (userId: string, currencyCode: string): number => {
+    const code = (currencyCode || baseCurrency).toUpperCase();
+    const row = accountBalances.find(r => r.userId === (userId || UNASSIGNED));
+    if (!row) return 0;
+    return row.currencies[code] || 0;
+  };
+
+  const currencyOptions = useMemo(
+    () => Object.keys(currencyRates)
+      .map(c => c.toUpperCase())
+      .sort((a, b) => (a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b))),
+    [currencyRates, baseCurrency]
+  );
+
+  const [isSetBalanceOpen, setIsSetBalanceOpen] = useState(false);
+  const [sbUserId, setSbUserId] = useState<string>("");
+  const [sbCurrency, setSbCurrency] = useState<string>(baseCurrency);
+  const [sbAmount, setSbAmount] = useState<string>("");
+
+  const handleOpenSetBalance = (userId: string) => {
+    // За замовчуванням — перша валюта, що вже є на рахунку, інакше базова.
+    const row = accountBalances.find(r => r.userId === userId);
+    const existingCodes = row ? Object.keys(row.currencies) : [];
+    const cur = (existingCodes[0] || baseCurrency).toUpperCase();
+    setSbUserId(userId);
+    setSbCurrency(cur);
+    setSbAmount(String(currentBalanceFor(userId, cur)));
+    setIsSetBalanceOpen(true);
+  };
+
+  const handleCloseSetBalance = () => {
+    setIsSetBalanceOpen(false);
+    setSbUserId("");
+    setSbAmount("");
+  };
+
+  const handleChangeSbCurrency = (code: string) => {
+    setSbCurrency(code);
+    // Підставляємо поточний баланс обраної валюти, щоб було видно, від чого рахуємо.
+    setSbAmount(String(currentBalanceFor(sbUserId, code)));
+  };
+
+  const sbCurrent = sbUserId ? currentBalanceFor(sbUserId, sbCurrency) : 0;
+  const sbTarget = parseFloat(sbAmount);
+  const sbDelta = isFinite(sbTarget) ? Math.round((sbTarget - sbCurrent) * 100) / 100 : 0;
+
+  const handleSaveSetBalance = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sbUserId) return;
+    if (!isFinite(sbTarget) || sbTarget < 0) return;
+    if (Math.abs(sbDelta) < 0.005) { handleCloseSetBalance(); return; } // вже стільки — нічого не робимо
+    onAddTransaction({
+      type: (sbDelta > 0 ? "Income" : "Expense") as TransactionType,
+      amount: Math.abs(sbDelta),
+      currency: sbCurrency,
+      category: BALANCE_ADJUST_CATEGORY,
+      description: `Встановлено баланс: ${fmtAmount(sbTarget)} ${sbCurrency}`,
+      date: new Date().toISOString(),
+      userId: sbUserId,
+      balanceAdjustment: true
+    });
+    handleCloseSetBalance();
+  };
+
   const defaultIncomeCategories: string[] = [];
 
   const defaultExpenseCategories: string[] = [];
@@ -433,7 +504,7 @@ export default function FinanceManager({
     let totalExpenses = 0;  // Expenses
 
     transactions.forEach(tx => {
-      if (isConversion(tx)) return; // конвертація не є доходом/витратою
+      if (isNonPL(tx)) return; // конвертація не є доходом/витратою
       const amount = toBase(tx);
       if (tx.type === "Income") {
         totalDeposits += amount;
@@ -455,7 +526,7 @@ export default function FinanceManager({
     let totalExpenses = 0;
 
     filteredTransactions.forEach(tx => {
-      if (isConversion(tx)) return; // конвертація не є доходом/витратою
+      if (isNonPL(tx)) return; // конвертація не є доходом/витратою
       const amount = toBase(tx);
       if (tx.type === "Income") {
         totalDeposits += amount;
@@ -572,7 +643,7 @@ export default function FinanceManager({
     const grouped: { [key: string]: { income: number; expense: number } } = {};
 
     chronTx.forEach(tx => {
-      if (isConversion(tx)) return; // конвертація не впливає на графік доходів/витрат
+      if (isNonPL(tx)) return; // конвертація не впливає на графік доходів/витрат
       const dateStr = tx.date.substring(0, 10);
       const amount = toBase(tx);
       if (!grouped[dateStr]) {
@@ -646,7 +717,7 @@ export default function FinanceManager({
 
     return transactions
       .filter(tx => {
-        if (tx.conversion) return false; // конвертація валюти — не дохід/витрата, у звіт не входить
+        if (tx.conversion || tx.balanceAdjustment) return false; // конвертація/коригування балансу — не дохід/витрата, у звіт не входять
         const d = new Date(tx.date);
         return d >= start && d <= end;
       })
@@ -923,40 +994,54 @@ export default function FinanceManager({
                 a[0] === baseCurrency ? -1 : b[0] === baseCurrency ? 1 : a[0].localeCompare(b[0])
               );
               return (
-                <button
+                <div
                   key={acc.userId}
-                  onClick={() => setAccountFilter(selected ? "All" : acc.userId)}
-                  className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
+                  className={`flex flex-col p-4 rounded-xl border transition-all ${
                     selected
                       ? "border-emerald-500/40 bg-emerald-500/[0.06] ring-1 ring-emerald-500/30"
                       : "border-white/5 bg-white/[0.02] hover:border-white/15"
                   }`}
                 >
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <div className={`p-1.5 rounded-lg border ${
-                      acc.userId === UNASSIGNED
-                        ? "bg-gray-500/10 text-gray-400 border-gray-500/20"
-                        : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    }`}>
-                      <Wallet className="w-4 h-4" />
+                  <div
+                    onClick={() => setAccountFilter(selected ? "All" : acc.userId)}
+                    className="text-left cursor-pointer"
+                    title="Показати операції цього рахунку"
+                  >
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <div className={`p-1.5 rounded-lg border ${
+                        acc.userId === UNASSIGNED
+                          ? "bg-gray-500/10 text-gray-400 border-gray-500/20"
+                          : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                      }`}>
+                        <Wallet className="w-4 h-4" />
+                      </div>
+                      <span className="text-sm font-bold text-white truncate">{acc.label}</span>
                     </div>
-                    <span className="text-sm font-bold text-white truncate">{acc.label}</span>
+                    {currencyList.length === 0 ? (
+                      <p className="text-xs text-gray-500 font-mono">0</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {currencyList.map(([code, val]) => (
+                          <div key={code} className="flex items-baseline justify-between gap-2">
+                            <span className="text-[10px] font-bold text-gray-500 uppercase">{code}</span>
+                            <span className={`font-mono font-bold text-sm ${Number(val) < 0 ? "text-red-400" : "text-white"}`}>
+                              {fmtAmount(Number(val))}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {currencyList.length === 0 ? (
-                    <p className="text-xs text-gray-500 font-mono">0</p>
-                  ) : (
-                    <div className="space-y-1">
-                      {currencyList.map(([code, val]) => (
-                        <div key={code} className="flex items-baseline justify-between gap-2">
-                          <span className="text-[10px] font-bold text-gray-500 uppercase">{code}</span>
-                          <span className={`font-mono font-bold text-sm ${Number(val) < 0 ? "text-red-400" : "text-white"}`}>
-                            {fmtAmount(Number(val))}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                  {acc.userId !== UNASSIGNED && (
+                    <button
+                      onClick={() => handleOpenSetBalance(acc.userId)}
+                      className="mt-3 pt-3 border-t border-white/5 flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 hover:text-emerald-400 transition-colors cursor-pointer"
+                    >
+                      <Wallet className="w-3 h-3" />
+                      Встановити баланс
+                    </button>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -1148,6 +1233,7 @@ export default function FinanceManager({
                   filteredTransactions.map(tx => {
                     const isIncome = tx.type === "Income";
                     const conv = tx.conversion;
+                    const adjust = tx.balanceAdjustment;
                     return (
                       <tr key={tx.id} className="hover:bg-white/[0.01] transition-colors">
                         <td className="px-5 py-3.5 font-mono text-[11px] text-gray-400">
@@ -1158,6 +1244,11 @@ export default function FinanceManager({
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm bg-violet-500/10 text-violet-300 border border-violet-500/20">
                               <ArrowRightLeft className="w-3 h-3" />
                               Конвертація
+                            </span>
+                          ) : adjust ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm bg-sky-500/10 text-sky-300 border border-sky-500/20">
+                              <Wallet className="w-3 h-3" />
+                              Коригування
                             </span>
                           ) : (
                             <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm ${
@@ -1667,6 +1758,86 @@ export default function FinanceManager({
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                 >
                   {editingConversionId ? "Оновити" : "Зберегти конвертацію"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SET / ADJUST ACCOUNT BALANCE MODAL */}
+      {isSetBalanceOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50">
+          <div className="bg-[#111112] rounded-xl border border-white/5 shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 bg-[#161618] border-b border-white/5 text-white flex justify-between items-center">
+              <h4 className="font-bold text-sm flex items-center gap-1.5">
+                <Wallet className="w-4 h-4 text-sky-300" />
+                Встановити баланс — {accountLabel(sbUserId)}
+              </h4>
+              <button onClick={handleCloseSetBalance} className="text-gray-400 hover:text-white text-lg cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveSetBalance} className="p-6 space-y-4">
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Вкажіть, скільки зараз реально лежить на рахунку в обраній валюті — баланс вирівняється під цю суму. Це фіксація наявного залишку, у дохід/витрату та звіти вона не потрапляє. Для кожної валюти встановіть баланс окремо.
+              </p>
+
+              {/* Currency */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Валюта</label>
+                <select
+                  value={sbCurrency}
+                  onChange={(e) => handleChangeSbCurrency(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                >
+                  {currencyOptions.map(code => (
+                    <option key={code} value={code}>{code}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Target amount */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Поточна сума на рахунку *</label>
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={sbAmount}
+                  onChange={(e) => setSbAmount(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white font-mono"
+                />
+              </div>
+
+              {/* Explanation of the change */}
+              <div className="text-[11px] font-mono text-gray-400 bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 space-y-0.5">
+                <div className="flex justify-between"><span>Зараз обліковано:</span><span className="text-gray-300">{fmtAmount(sbCurrent)} {sbCurrency}</span></div>
+                {isFinite(sbTarget) && (
+                  <div className="flex justify-between">
+                    <span>Коригування:</span>
+                    <span className={sbDelta > 0 ? "text-emerald-400" : sbDelta < 0 ? "text-red-400" : "text-gray-500"}>
+                      {sbDelta > 0 ? "+" : ""}{fmtAmount(sbDelta)} {sbCurrency}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                <button
+                  type="button"
+                  onClick={handleCloseSetBalance}
+                  className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Зберегти
                 </button>
               </div>
             </form>
