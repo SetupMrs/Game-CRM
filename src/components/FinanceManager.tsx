@@ -123,6 +123,10 @@ export default function FinanceManager({
     const byUser: Record<string, Record<string, number>> = {};
     const ensure = (uid: string) => (byUser[uid] = byUser[uid] || {});
 
+    // Кожен користувач CRM отримує картку одразу, навіть без жодної операції —
+    // тоді кнопка «Встановити баланс» доступна з самого початку.
+    users.forEach(u => ensure(u.id));
+
     for (const tx of transactions) {
       const uid = tx.userId || UNASSIGNED;
       const bucket = ensure(uid);
