@@ -29,6 +29,10 @@ import { formatDate } from "../utils";
 import BudgetPlanner from "./BudgetPlanner";
 import CurrencyRatesPanel from "./CurrencyRatesPanel";
 
+// Валюта за замовчуванням для сторінки Фінансів: нові операції, конвертація,
+// встановлення балансу та перегляд підсумків стартують у гривні.
+const FINANCE_DEFAULT_CURRENCY = "UAH";
+
 interface FinanceManagerProps {
   transactions: Transaction[];
   budgets?: BudgetPlan[];
@@ -214,7 +218,7 @@ export default function FinanceManager({
   const [newTx, setNewTx] = useState({
     type: "Income" as TransactionType,
     amount: "",
-    currency: baseCurrency,
+    currency: FINANCE_DEFAULT_CURRENCY,
     category: customIncomeCategories[0] || "Оплата від клієнта",
     description: "",
     date: new Date().toISOString().split("T")[0],
@@ -234,12 +238,7 @@ export default function FinanceManager({
   const [newCategoryName, setNewCategoryName] = useState("");
 
   // --- Currency conversion (обмін валюти всередині одного рахунку) ---
-  const pickDefaultTargetCurrency = (): string => {
-    const codes = Object.keys(currencyRates).map(c => c.toUpperCase());
-    if (codes.includes("UAH")) return "UAH";
-    const nonBase = codes.find(c => c !== baseCurrency);
-    return nonBase || baseCurrency;
-  };
+  const pickDefaultTargetCurrency = (): string => FINANCE_DEFAULT_CURRENCY;
 
   const emptyConvForm = () => ({
     userId: currentUserId || "",
@@ -329,16 +328,20 @@ export default function FinanceManager({
     return row.currencies[code] || 0;
   };
 
-  const currencyOptions = useMemo(
-    () => Object.keys(currencyRates)
-      .map(c => c.toUpperCase())
-      .sort((a, b) => (a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b))),
-    [currencyRates, baseCurrency]
-  );
+  const currencyOptions = useMemo(() => {
+    const set = new Set(Object.keys(currencyRates).map(c => c.toUpperCase()));
+    // Гарантуємо, що гривня та базова валюта завжди є у списках вибору.
+    set.add(FINANCE_DEFAULT_CURRENCY);
+    set.add((baseCurrency || "USD").toUpperCase());
+    return Array.from(set).sort((a, b) =>
+      a === FINANCE_DEFAULT_CURRENCY ? -1 : b === FINANCE_DEFAULT_CURRENCY ? 1 :
+      a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)
+    );
+  }, [currencyRates, baseCurrency]);
 
   // Валюта перегляду: у якій валюті показувати підсумки Фінансів (лише візуально,
   // базову валюту й збережені дані не змінює).
-  const [viewCurrency, setViewCurrency] = useState<string>(baseCurrency);
+  const [viewCurrency, setViewCurrency] = useState<string>(FINANCE_DEFAULT_CURRENCY);
   const effectiveViewCurrency = currencyRates[viewCurrency] ? viewCurrency : baseCurrency;
   const viewRate = currencyRates[effectiveViewCurrency] || 1;
   const toView = (baseAmount: number): number => baseAmount / viewRate;
@@ -352,7 +355,7 @@ export default function FinanceManager({
     // За замовчуванням — перша валюта, що вже є на рахунку, інакше базова.
     const row = accountBalances.find(r => r.userId === userId);
     const existingCodes = row ? Object.keys(row.currencies) : [];
-    const cur = (existingCodes[0] || baseCurrency).toUpperCase();
+    const cur = (existingCodes[0] || FINANCE_DEFAULT_CURRENCY).toUpperCase();
     setSbUserId(userId);
     setSbCurrency(cur);
     setSbAmount(String(currentBalanceFor(userId, cur)));
@@ -576,7 +579,7 @@ export default function FinanceManager({
     setNewTx({
       type: "Income",
       amount: "",
-      currency: baseCurrency,
+      currency: FINANCE_DEFAULT_CURRENCY,
       category: customIncomeCategories[0] || "Оплата від клієнта",
       description: "",
       date: new Date().toISOString().split("T")[0],
@@ -626,7 +629,7 @@ export default function FinanceManager({
     setNewTx({
       type: "Income",
       amount: "",
-      currency: baseCurrency,
+      currency: FINANCE_DEFAULT_CURRENCY,
       category: customIncomeCategories[0] || "Оплата від клієнта",
       description: "",
       date: new Date().toISOString().split("T")[0],
@@ -1465,7 +1468,7 @@ export default function FinanceManager({
                     onChange={(e) => setNewTx({ ...newTx, currency: e.target.value })}
                     className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
                   >
-                    {Object.keys(currencyRates).sort((a, b) => a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)).map(code => (
+                    {currencyOptions.map(code => (
                       <option key={code} value={code}>{code}</option>
                     ))}
                   </select>
@@ -1697,7 +1700,7 @@ export default function FinanceManager({
                     onChange={(e) => setConvForm({ ...convForm, fromCurrency: e.target.value })}
                     className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
                   >
-                    {Object.keys(currencyRates).sort((a, b) => a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)).map(code => (
+                    {currencyOptions.map(code => (
                       <option key={code} value={code}>{code}</option>
                     ))}
                   </select>
@@ -1730,7 +1733,7 @@ export default function FinanceManager({
                     onChange={(e) => setConvForm({ ...convForm, toCurrency: e.target.value })}
                     className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
                   >
-                    {Object.keys(currencyRates).sort((a, b) => a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)).map(code => (
+                    {currencyOptions.map(code => (
                       <option key={code} value={code}>{code}</option>
                     ))}
                   </select>
