@@ -17,9 +17,12 @@ import {
   ChevronDown,
   ChevronUp,
   CheckSquare as CheckSquareIcon,
-  Truck
+  Truck,
+  Users,
+  ArrowRightLeft
 } from "lucide-react";
 import { Transaction, TransactionType, BudgetPlan, Task, Supplier } from "../types";
+import { BasicUser } from "../apiClient";
 // jsPDF is loaded on demand (dynamic import) below, since it's fairly heavy
 // and only needed when the user actually exports a PDF report.
 import { formatDate } from "../utils";
@@ -31,6 +34,8 @@ interface FinanceManagerProps {
   budgets?: BudgetPlan[];
   tasks?: Task[];
   suppliers?: Supplier[];
+  users?: BasicUser[]; // усі користувачі CRM — кожен має свій рахунок
+  currentUserId?: string | null; // хто зараз залогінений (рахунок за замовчуванням для нової операції)
   baseCurrency?: string;
   currencyRates?: Record<string, number>;
   onUpdateCurrencyRates?: (rates: Record<string, number>) => void;
@@ -47,6 +52,8 @@ export default function FinanceManager({
   budgets = [],
   tasks = [],
   suppliers = [],
+  users = [],
+  currentUserId = null,
   baseCurrency = "USD",
   currencyRates = { USD: 1 },
   onUpdateCurrencyRates,
@@ -81,10 +88,78 @@ export default function FinanceManager({
     return map;
   }, [suppliers]);
 
+  // Чи операція є конвертацією валюти (не звичайний дохід/витрата).
+  const isConversion = (tx: Transaction): boolean => !!tx.conversion;
+
+  // id → ім'я користувача, для підписів рахунків у списку та на картках.
+  const userNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    users.forEach(u => { map[u.id] = u.username; });
+    return map;
+  }, [users]);
+
+  // Спеціальне значення фільтра/рахунку для операцій без прив'язки до користувача.
+  const UNASSIGNED = "__unassigned__";
+
+  const accountLabel = (userId?: string): string => {
+    if (!userId) return "Без рахунку";
+    return userNameById[userId] || "Невідомий користувач";
+  };
+
+  // Форматуємо число у стислому вигляді (без зайвих нулів), напр. 4100 / 12 400.5
+  const fmtAmount = (n: number): string =>
+    n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  // Баланси по рахунках: для кожного користувача — скільки зараз лежить у кожній
+  // валюті. Дохід додає, витрата віднімає, конвертація переносить між валютами.
+  // Показуємо всім (прозоро) — рахунки всіх користувачів.
+  const accountBalances = useMemo(() => {
+    // userId (або UNASSIGNED) -> { currencyCode -> сума }
+    const byUser: Record<string, Record<string, number>> = {};
+    const ensure = (uid: string) => (byUser[uid] = byUser[uid] || {});
+
+    for (const tx of transactions) {
+      const uid = tx.userId || UNASSIGNED;
+      const bucket = ensure(uid);
+      const cur = (tx.currency || baseCurrency).toUpperCase();
+      const amt = Number(tx.amount) || 0;
+      if (tx.conversion) {
+        const toCur = (tx.conversion.toCurrency || baseCurrency).toUpperCase();
+        const toAmt = Number(tx.conversion.toAmount) || 0;
+        bucket[cur] = (bucket[cur] || 0) - amt;
+        bucket[toCur] = (bucket[toCur] || 0) + toAmt;
+      } else if (tx.type === "Income") {
+        bucket[cur] = (bucket[cur] || 0) + amt;
+      } else {
+        bucket[cur] = (bucket[cur] || 0) - amt;
+      }
+    }
+
+    // Формуємо впорядкований список: спершу реальні користувачі (за іменем),
+    // потім «Без рахунку», якщо там щось є.
+    const rows = Object.entries(byUser).map(([uid, currencies]) => {
+      // прибираємо нульові валюти, щоб не засмічувати картку
+      const cleaned: Record<string, number> = {};
+      for (const [code, val] of Object.entries(currencies)) {
+        if (Math.abs(val) > 0.000001) cleaned[code] = val;
+      }
+      return { userId: uid, label: accountLabel(uid === UNASSIGNED ? undefined : uid), currencies: cleaned };
+    });
+
+    rows.sort((a, b) => {
+      if (a.userId === UNASSIGNED) return 1;
+      if (b.userId === UNASSIGNED) return -1;
+      return a.label.localeCompare(b.label);
+    });
+
+    return rows;
+  }, [transactions, users, baseCurrency]);
+
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"All" | "Income" | "Expense">("All");
   const [categoryFilter, setCategoryFilter] = useState("All");
+  const [accountFilter, setAccountFilter] = useState<string>("All"); // "All" | userId | UNASSIGNED
   const [periodFilter, setPeriodFilter] = useState<"All" | "Week" | "Month" | "Quarter" | "Custom">("All");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
@@ -136,7 +211,8 @@ export default function FinanceManager({
     date: new Date().toISOString().split("T")[0],
     counterparty: "",
     taskId: "",
-    supplierId: ""
+    supplierId: "",
+    userId: currentUserId || ""
   });
 
   // Report Modal state
@@ -147,6 +223,93 @@ export default function FinanceManager({
 
   const [isAddingCustomCategory, setIsAddingCustomCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+
+  // --- Currency conversion (обмін валюти всередині одного рахунку) ---
+  const pickDefaultTargetCurrency = (): string => {
+    const codes = Object.keys(currencyRates).map(c => c.toUpperCase());
+    if (codes.includes("UAH")) return "UAH";
+    const nonBase = codes.find(c => c !== baseCurrency);
+    return nonBase || baseCurrency;
+  };
+
+  const emptyConvForm = () => ({
+    userId: currentUserId || "",
+    fromAmount: "",
+    fromCurrency: baseCurrency,
+    toAmount: "",
+    toCurrency: pickDefaultTargetCurrency(),
+    date: new Date().toISOString().split("T")[0],
+    description: ""
+  });
+
+  const [isConvertOpen, setIsConvertOpen] = useState(false);
+  const [editingConversionId, setEditingConversionId] = useState<string | null>(null);
+  const [convForm, setConvForm] = useState(emptyConvForm());
+
+  const handleOpenConvert = () => {
+    setEditingConversionId(null);
+    setConvForm(emptyConvForm());
+    setIsConvertOpen(true);
+  };
+
+  const handleCloseConvert = () => {
+    setIsConvertOpen(false);
+    setEditingConversionId(null);
+    setConvForm(emptyConvForm());
+  };
+
+  const handleStartEditConversion = (tx: Transaction) => {
+    if (!tx.conversion) return;
+    setEditingConversionId(tx.id);
+    setConvForm({
+      userId: tx.userId || "",
+      fromAmount: tx.amount.toString(),
+      fromCurrency: (tx.currency || baseCurrency).toUpperCase(),
+      toAmount: tx.conversion.toAmount.toString(),
+      toCurrency: (tx.conversion.toCurrency || baseCurrency).toUpperCase(),
+      date: tx.date.substring(0, 10),
+      description: tx.description || ""
+    });
+    setIsConvertOpen(true);
+  };
+
+  const handleSaveConversion = (e: React.FormEvent) => {
+    e.preventDefault();
+    const fromNum = parseFloat(convForm.fromAmount);
+    const toNum = parseFloat(convForm.toAmount);
+    if (isNaN(fromNum) || fromNum <= 0 || isNaN(toNum) || toNum <= 0) return;
+    if (convForm.fromCurrency === convForm.toCurrency) return; // немає сенсу конвертувати в ту саму валюту
+
+    const autoDescr = `Конвертація ${fmtAmount(fromNum)} ${convForm.fromCurrency} → ${fmtAmount(toNum)} ${convForm.toCurrency}`;
+    const payload = {
+      type: "Expense" as TransactionType, // тип-заглушка: конвертація виключена з підсумків доходу/витрати
+      amount: fromNum,
+      currency: convForm.fromCurrency,
+      category: "Конвертація",
+      description: convForm.description.trim() || autoDescr,
+      date: new Date(convForm.date).toISOString(),
+      userId: convForm.userId || undefined,
+      conversion: { toAmount: toNum, toCurrency: convForm.toCurrency }
+    };
+
+    if (editingConversionId) {
+      const existing = transactions.find(t => t.id === editingConversionId);
+      if (existing) {
+        onUpdateTransaction({ ...existing, ...payload });
+      }
+    } else {
+      onAddTransaction(payload);
+    }
+    handleCloseConvert();
+  };
+
+  // Курс, що випливає з двох сум (скільки цільової валюти за 1 одиницю вихідної).
+  const convRate = (() => {
+    const f = parseFloat(convForm.fromAmount);
+    const t = parseFloat(convForm.toAmount);
+    if (!f || !t || f <= 0) return null;
+    return t / f;
+  })();
 
   const defaultIncomeCategories: string[] = [];
 
@@ -230,6 +393,15 @@ export default function FinanceManager({
       result = result.filter(tx => tx.category === categoryFilter);
     }
 
+    // Account filter (за конкретним рахунком/користувачем)
+    if (accountFilter !== "All") {
+      if (accountFilter === UNASSIGNED) {
+        result = result.filter(tx => !tx.userId);
+      } else {
+        result = result.filter(tx => tx.userId === accountFilter);
+      }
+    }
+
     // Period filter
     const now = new Date();
     if (periodFilter === "Week") {
@@ -253,7 +425,7 @@ export default function FinanceManager({
 
     // Sort by date descending
     return result.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [transactions, searchQuery, typeFilter, categoryFilter, periodFilter, customStartDate, customEndDate]);
+  }, [transactions, searchQuery, typeFilter, categoryFilter, accountFilter, periodFilter, customStartDate, customEndDate]);
 
   // Aggregate metrics
   const stats = useMemo(() => {
@@ -261,6 +433,7 @@ export default function FinanceManager({
     let totalExpenses = 0;  // Expenses
 
     transactions.forEach(tx => {
+      if (isConversion(tx)) return; // конвертація не є доходом/витратою
       const amount = toBase(tx);
       if (tx.type === "Income") {
         totalDeposits += amount;
@@ -282,6 +455,7 @@ export default function FinanceManager({
     let totalExpenses = 0;
 
     filteredTransactions.forEach(tx => {
+      if (isConversion(tx)) return; // конвертація не є доходом/витратою
       const amount = toBase(tx);
       if (tx.type === "Income") {
         totalDeposits += amount;
@@ -308,7 +482,8 @@ export default function FinanceManager({
       date: tx.date.substring(0, 10),
       counterparty: tx.counterparty || "",
       taskId: tx.taskId || "",
-      supplierId: tx.supplierId || ""
+      supplierId: tx.supplierId || "",
+      userId: tx.userId || ""
     });
     setIsFormOpen(true);
   };
@@ -325,7 +500,8 @@ export default function FinanceManager({
       date: new Date().toISOString().split("T")[0],
       counterparty: "",
       taskId: "",
-      supplierId: ""
+      supplierId: "",
+      userId: currentUserId || ""
     });
   };
 
@@ -345,7 +521,8 @@ export default function FinanceManager({
         date: new Date(newTx.date).toISOString(),
         counterparty: newTx.counterparty.trim() || undefined,
         taskId: newTx.taskId || undefined,
-        supplierId: newTx.supplierId || undefined
+        supplierId: newTx.supplierId || undefined,
+        userId: newTx.userId || undefined
       });
       setEditingTx(null);
     } else {
@@ -358,7 +535,8 @@ export default function FinanceManager({
         date: new Date(newTx.date).toISOString(),
         counterparty: newTx.counterparty.trim() || undefined,
         taskId: newTx.taskId || undefined,
-        supplierId: newTx.supplierId || undefined
+        supplierId: newTx.supplierId || undefined,
+        userId: newTx.userId || undefined
       });
     }
 
@@ -372,7 +550,8 @@ export default function FinanceManager({
       date: new Date().toISOString().split("T")[0],
       counterparty: "",
       taskId: "",
-      supplierId: ""
+      supplierId: "",
+      userId: currentUserId || ""
     });
     setIsFormOpen(false);
   };
@@ -393,6 +572,7 @@ export default function FinanceManager({
     const grouped: { [key: string]: { income: number; expense: number } } = {};
 
     chronTx.forEach(tx => {
+      if (isConversion(tx)) return; // конвертація не впливає на графік доходів/витрат
       const dateStr = tx.date.substring(0, 10);
       const amount = toBase(tx);
       if (!grouped[dateStr]) {
@@ -466,6 +646,7 @@ export default function FinanceManager({
 
     return transactions
       .filter(tx => {
+        if (tx.conversion) return false; // конвертація валюти — не дохід/витрата, у звіт не входить
         const d = new Date(tx.date);
         return d >= start && d <= end;
       })
@@ -620,6 +801,13 @@ export default function FinanceManager({
             Звіти
           </button>
           <button
+            onClick={handleOpenConvert}
+            className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 border border-white/10 hover:border-white/20 bg-white/[0.02] text-gray-300 hover:text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+          >
+            <ArrowRightLeft className="w-4 h-4" />
+            Конвертація
+          </button>
+          <button
             onClick={() => setIsFormOpen(true)}
             className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-md shadow-emerald-600/20"
           >
@@ -709,6 +897,71 @@ export default function FinanceManager({
           </p>
         </div>
       </div>
+
+      {/* Accounts (per-user balances) */}
+      {accountBalances.length > 0 && (
+        <div className="bg-[#111112] p-5 rounded-xl border border-white/5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-emerald-400" />
+              Рахунки
+            </h4>
+            {accountFilter !== "All" && (
+              <button
+                onClick={() => setAccountFilter("All")}
+                className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
+              >
+                ✕ Показати всі операції
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {accountBalances.map(acc => {
+              const selected = accountFilter === acc.userId;
+              const currencyList = Object.entries(acc.currencies).sort((a, b) =>
+                a[0] === baseCurrency ? -1 : b[0] === baseCurrency ? 1 : a[0].localeCompare(b[0])
+              );
+              return (
+                <button
+                  key={acc.userId}
+                  onClick={() => setAccountFilter(selected ? "All" : acc.userId)}
+                  className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
+                    selected
+                      ? "border-emerald-500/40 bg-emerald-500/[0.06] ring-1 ring-emerald-500/30"
+                      : "border-white/5 bg-white/[0.02] hover:border-white/15"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <div className={`p-1.5 rounded-lg border ${
+                      acc.userId === UNASSIGNED
+                        ? "bg-gray-500/10 text-gray-400 border-gray-500/20"
+                        : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    }`}>
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <span className="text-sm font-bold text-white truncate">{acc.label}</span>
+                  </div>
+                  {currencyList.length === 0 ? (
+                    <p className="text-xs text-gray-500 font-mono">0</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {currencyList.map(([code, val]) => (
+                        <div key={code} className="flex items-baseline justify-between gap-2">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase">{code}</span>
+                          <span className={`font-mono font-bold text-sm ${Number(val) < 0 ? "text-red-400" : "text-white"}`}>
+                            {fmtAmount(Number(val))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* SVG Chart & Financial Trends */}
       {chartData.length >= 2 && svgChart ? (
@@ -876,6 +1129,7 @@ export default function FinanceManager({
                 <tr className="bg-[#161618] border-b border-white/5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
                   <th className="px-5 py-3">Дата</th>
                   <th className="px-5 py-3">Тип</th>
+                  <th className="px-5 py-3">Рахунок</th>
                   <th className="px-5 py-3">Категорія / Тип оплати</th>
                   <th className="px-5 py-3">Банк / Метод оплати</th>
                   <th className="px-5 py-3">Опис операції</th>
@@ -886,27 +1140,45 @@ export default function FinanceManager({
               <tbody className="divide-y divide-white/5 text-xs text-gray-300">
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-16 text-gray-500 font-medium">
+                    <td colSpan={8} className="text-center py-16 text-gray-500 font-medium">
                       Операцій за обраними фільтрами не знайдено.
                     </td>
                   </tr>
                 ) : (
                   filteredTransactions.map(tx => {
                     const isIncome = tx.type === "Income";
+                    const conv = tx.conversion;
                     return (
                       <tr key={tx.id} className="hover:bg-white/[0.01] transition-colors">
                         <td className="px-5 py-3.5 font-mono text-[11px] text-gray-400">
                           {formatDate(tx.date)} {tx.date.includes("T") && tx.date.substring(11, 16)}
                         </td>
                         <td className="px-5 py-3.5">
-                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm ${
-                            isIncome 
-                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
-                              : "bg-red-500/10 text-red-400 border border-red-500/20"
-                          }`}>
-                            {isIncome ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
-                            {isIncome ? "Внесок" : "Витрата"}
-                          </span>
+                          {conv ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm bg-violet-500/10 text-violet-300 border border-violet-500/20">
+                              <ArrowRightLeft className="w-3 h-3" />
+                              Конвертація
+                            </span>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-sm ${
+                              isIncome 
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                                : "bg-red-500/10 text-red-400 border border-red-500/20"
+                            }`}>
+                              {isIncome ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                              {isIncome ? "Внесок" : "Витрата"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          {tx.userId ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-200">
+                              <Users className="w-3 h-3 text-emerald-400/80" />
+                              {accountLabel(tx.userId)}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-gray-600">Без рахунку</span>
+                          )}
                         </td>
                         <td className="px-5 py-3.5 font-semibold text-white">
                           {tx.category}
@@ -940,16 +1212,26 @@ export default function FinanceManager({
                             </div>
                           )}
                         </td>
-                        <td className={`px-5 py-3.5 text-right font-mono font-bold text-[13px] ${
-                          isIncome ? "text-emerald-400" : "text-red-400"
-                        }`}>
-                          {isIncome ? "+" : "-"}{tx.amount.toLocaleString()}
-                          <span className="text-[10px] font-normal text-gray-500 ml-1">{(tx.currency || baseCurrency).toUpperCase()}</span>
-                        </td>
+                        {conv ? (
+                          <td className="px-5 py-3.5 text-right font-mono font-bold text-[13px] whitespace-nowrap">
+                            <span className="text-red-400">-{fmtAmount(tx.amount)}</span>
+                            <span className="text-[10px] font-normal text-gray-500 ml-1">{(tx.currency || baseCurrency).toUpperCase()}</span>
+                            <ArrowRightLeft className="inline w-3 h-3 mx-1.5 text-gray-500" />
+                            <span className="text-emerald-400">+{fmtAmount(conv.toAmount)}</span>
+                            <span className="text-[10px] font-normal text-gray-500 ml-1">{(conv.toCurrency || baseCurrency).toUpperCase()}</span>
+                          </td>
+                        ) : (
+                          <td className={`px-5 py-3.5 text-right font-mono font-bold text-[13px] ${
+                            isIncome ? "text-emerald-400" : "text-red-400"
+                          }`}>
+                            {isIncome ? "+" : "-"}{tx.amount.toLocaleString()}
+                            <span className="text-[10px] font-normal text-gray-500 ml-1">{(tx.currency || baseCurrency).toUpperCase()}</span>
+                          </td>
+                        )}
                         <td className="px-5 py-3.5 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
-                              onClick={() => handleStartEdit(tx)}
+                              onClick={() => conv ? handleStartEditConversion(tx) : handleStartEdit(tx)}
                               className="p-1 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md transition-colors cursor-pointer"
                               title="Редагувати запис"
                             >
@@ -995,6 +1277,24 @@ export default function FinanceManager({
             </div>
 
             <form onSubmit={handleCreateTransaction} className="p-6 space-y-4">
+              {/* Account (user) selector */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-emerald-400" />
+                  Рахунок
+                </label>
+                <select
+                  value={newTx.userId}
+                  onChange={(e) => setNewTx({ ...newTx, userId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                >
+                  <option value="">Без рахунку</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>{u.username}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Type selector buttons */}
               <div>
                 <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Напрямок транзакції *</label>
@@ -1216,6 +1516,157 @@ export default function FinanceManager({
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                 >
                   {editingTx ? "Оновити операцію" : "Зберегти операцію"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CURRENCY CONVERSION MODAL */}
+      {isConvertOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50">
+          <div className="bg-[#111112] rounded-xl border border-white/5 shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 bg-[#161618] border-b border-white/5 text-white flex justify-between items-center">
+              <h4 className="font-bold text-sm flex items-center gap-1.5">
+                <ArrowRightLeft className="w-4 h-4 text-violet-300" />
+                {editingConversionId ? "Редагувати конвертацію" : "Конвертація валюти"}
+              </h4>
+              <button onClick={handleCloseConvert} className="text-gray-400 hover:text-white text-lg cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveConversion} className="p-6 space-y-4">
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Обмін всередині одного рахунку: вкажіть, скільки віддали й скільки отримали — курс порахується сам. У дохід/витрату це не потрапляє, лише переносить гроші між валютами.
+              </p>
+
+              {/* Account */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-emerald-400" />
+                  Рахунок
+                </label>
+                <select
+                  value={convForm.userId}
+                  onChange={(e) => setConvForm({ ...convForm, userId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                >
+                  <option value="">Без рахунку</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>{u.username}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Give */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Віддаю *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={convForm.fromAmount}
+                    onChange={(e) => setConvForm({ ...convForm, fromAmount: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Валюта</label>
+                  <select
+                    value={convForm.fromCurrency}
+                    onChange={(e) => setConvForm({ ...convForm, fromCurrency: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                  >
+                    {Object.keys(currencyRates).sort((a, b) => a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)).map(code => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-center">
+                <ArrowRightLeft className="w-4 h-4 text-gray-500 rotate-90" />
+              </div>
+
+              {/* Get */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Отримую *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={convForm.toAmount}
+                    onChange={(e) => setConvForm({ ...convForm, toAmount: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Валюта</label>
+                  <select
+                    value={convForm.toCurrency}
+                    onChange={(e) => setConvForm({ ...convForm, toCurrency: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                  >
+                    {Object.keys(currencyRates).sort((a, b) => a === baseCurrency ? -1 : b === baseCurrency ? 1 : a.localeCompare(b)).map(code => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Implied rate / same-currency warning */}
+              {convForm.fromCurrency === convForm.toCurrency ? (
+                <p className="text-[11px] text-amber-400 font-semibold">Оберіть дві різні валюти.</p>
+              ) : convRate ? (
+                <p className="text-[11px] text-gray-400 font-mono text-center">
+                  Курс: 1 {convForm.fromCurrency} = {fmtAmount(convRate)} {convForm.toCurrency}
+                </p>
+              ) : null}
+
+              {/* Date */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Дата *</label>
+                <input
+                  type="date"
+                  required
+                  value={convForm.date}
+                  onChange={(e) => setConvForm({ ...convForm, date: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white font-mono cursor-pointer"
+                />
+              </div>
+
+              {/* Optional note */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Примітка</label>
+                <input
+                  type="text"
+                  placeholder="напр. продаж USDT на Bybit..."
+                  value={convForm.description}
+                  onChange={(e) => setConvForm({ ...convForm, description: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                <button
+                  type="button"
+                  onClick={handleCloseConvert}
+                  className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  {editingConversionId ? "Оновити" : "Зберегти конвертацію"}
                 </button>
               </div>
             </form>

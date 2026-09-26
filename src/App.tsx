@@ -2014,6 +2014,8 @@ export default function App() {
                     budgets={db.budgets || []}
                     tasks={visibleTasks}
                     suppliers={visibleSuppliers}
+                    users={assignableUsers}
+                    currentUserId={appUser?.id || null}
                     baseCurrency={db.baseCurrency || "USD"}
                     currencyRates={db.currencyRates || {}}
                     onUpdateCurrencyRates={handleUpdateCurrencyRates}
