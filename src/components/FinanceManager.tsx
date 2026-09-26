@@ -336,6 +336,13 @@ export default function FinanceManager({
     [currencyRates, baseCurrency]
   );
 
+  // Валюта перегляду: у якій валюті показувати підсумки Фінансів (лише візуально,
+  // базову валюту й збережені дані не змінює).
+  const [viewCurrency, setViewCurrency] = useState<string>(baseCurrency);
+  const effectiveViewCurrency = currencyRates[viewCurrency] ? viewCurrency : baseCurrency;
+  const viewRate = currencyRates[effectiveViewCurrency] || 1;
+  const toView = (baseAmount: number): number => baseAmount / viewRate;
+
   const [isSetBalanceOpen, setIsSetBalanceOpen] = useState(false);
   const [sbUserId, setSbUserId] = useState<string>("");
   const [sbCurrency, setSbCurrency] = useState<string>(baseCurrency);
@@ -914,6 +921,21 @@ export default function FinanceManager({
         />
       )}
 
+      {/* View currency selector */}
+      <div className="flex items-center justify-end gap-2">
+        <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Перегляд у валюті</label>
+        <select
+          value={effectiveViewCurrency}
+          onChange={(e) => setViewCurrency(e.target.value)}
+          className="px-3 py-1.5 text-xs font-semibold border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+          title="Валюта, у якій показувати підсумки (лише для перегляду, базову валюту не змінює)"
+        >
+          {currencyOptions.map(code => (
+            <option key={code} value={code}>{code}</option>
+          ))}
+        </select>
+      </div>
+
       {/* Metrics Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* Balance */}
@@ -922,7 +944,7 @@ export default function FinanceManager({
             <div>
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Загальний Баланс Каси</p>
               <h2 className="text-2xl font-bold text-white mt-1.5 font-mono">
-                {stats.balance.toLocaleString()} <span className="text-sm font-sans font-normal text-gray-400">{baseCurrency}</span>
+                {fmtAmount(toView(stats.balance))} <span className="text-sm font-sans font-normal text-gray-400">{effectiveViewCurrency}</span>
               </h2>
             </div>
             <div className="p-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg">
@@ -942,7 +964,7 @@ export default function FinanceManager({
             <div>
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Усього Внесено / Депозити</p>
               <h2 className="text-2xl font-bold text-emerald-400 mt-1.5 font-mono">
-                +{stats.totalDeposits.toLocaleString()} <span className="text-sm font-sans font-normal text-gray-400">{baseCurrency}</span>
+                +{fmtAmount(toView(stats.totalDeposits))} <span className="text-sm font-sans font-normal text-gray-400">{effectiveViewCurrency}</span>
               </h2>
             </div>
             <div className="p-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg">
@@ -960,7 +982,7 @@ export default function FinanceManager({
             <div>
               <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Витрачено на Операції</p>
               <h2 className="text-2xl font-bold text-red-400 mt-1.5 font-mono">
-                -{stats.totalExpenses.toLocaleString()} <span className="text-sm font-sans font-normal text-gray-400">{baseCurrency}</span>
+                -{fmtAmount(toView(stats.totalExpenses))} <span className="text-sm font-sans font-normal text-gray-400">{effectiveViewCurrency}</span>
               </h2>
             </div>
             <div className="p-2.5 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg">
@@ -1058,7 +1080,7 @@ export default function FinanceManager({
           <div className="flex justify-between items-center">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
-              Графік Динаміки Загального Балансу ({baseCurrency})
+              Графік Динаміки Загального Балансу ({effectiveViewCurrency})
             </h4>
             <span className="text-[10px] font-mono text-gray-500">Останні {chartData.length} операційних днів</span>
           </div>
@@ -1109,7 +1131,7 @@ export default function FinanceManager({
                       textAnchor="middle"
                       className="font-mono"
                     >
-                      {Math.round(p.balance).toLocaleString()}
+                      {fmtAmount(toView(p.balance))}
                     </text>
                     <text 
                       x={p.x} 
@@ -1353,9 +1375,9 @@ export default function FinanceManager({
             <div className="bg-[#161618] px-5 py-3.5 border-t border-white/5 flex flex-col sm:flex-row justify-between items-center text-[11px] font-semibold text-gray-400 gap-2">
               <span>Показано операцій: {filteredTransactions.length}</span>
               <div className="flex gap-4 font-mono">
-                <span>Надходження: <span className="text-emerald-400 font-bold">+{filteredStats.totalDeposits.toLocaleString()} {baseCurrency}</span></span>
-                <span>Витрати: <span className="text-red-400 font-bold">-{filteredStats.totalExpenses.toLocaleString()} {baseCurrency}</span></span>
-                <span>Баланс: <span className={`${filteredStats.balance >= 0 ? "text-emerald-400" : "text-red-400"} font-bold`}>{filteredStats.balance.toLocaleString()} {baseCurrency}</span></span>
+                <span>Надходження: <span className="text-emerald-400 font-bold">+{fmtAmount(toView(filteredStats.totalDeposits))} {effectiveViewCurrency}</span></span>
+                <span>Витрати: <span className="text-red-400 font-bold">-{fmtAmount(toView(filteredStats.totalExpenses))} {effectiveViewCurrency}</span></span>
+                <span>Баланс: <span className={`${filteredStats.balance >= 0 ? "text-emerald-400" : "text-red-400"} font-bold`}>{fmtAmount(toView(filteredStats.balance))} {effectiveViewCurrency}</span></span>
               </div>
             </div>
           )}
