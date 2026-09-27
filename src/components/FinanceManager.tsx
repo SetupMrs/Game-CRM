@@ -1733,11 +1733,10 @@ export default function FinanceManager({
 
               {/* Description */}
               <div>
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Опис *</label>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Опис</label>
                 <textarea
-                  required
                   rows={2}
-                  placeholder="напр. Передплата за договором №23 чи оплата пального..."
+                  placeholder="необовʼязково — напр. Передплата за договором №23"
                   value={newTx.description}
                   onChange={(e) => setNewTx({ ...newTx, description: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
