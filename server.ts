@@ -371,7 +371,7 @@ app.delete("/api/users/:id", requireAuth, (req, res) => {
 const DEFAULT_CURRENCY_RATES = { USD: 1, RUB: 0.0105, UAH: 0.024 };
 const DEFAULT_BASE_CURRENCY = "USD";
 
-const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "activityLog", "budgets", "taskTemplates", "steamWatches", "ggselCategories", "ggselItems", "financeAccounts"] as const;
+const DB_ARRAY_KEYS = ["tasks", "transactions", "suppliers", "activityLog", "budgets", "taskTemplates", "steamWatches", "ggselCategories", "ggselItems", "financeAccounts", "transactionTemplates"] as const;
 
 const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
   tasks: "tasks",
@@ -383,7 +383,8 @@ const TABLE_BY_KEY: Record<(typeof DB_ARRAY_KEYS)[number], string> = {
   steamWatches: "steam_watches",
   ggselCategories: "ggsel_categories",
   ggselItems: "ggsel_items",
-  financeAccounts: "finance_accounts"
+  financeAccounts: "finance_accounts",
+  transactionTemplates: "transaction_templates"
 };
 
 function normalizeCurrencyRates(value: any, baseCurrency: string): Record<string, number> {
@@ -418,6 +419,7 @@ sqlite.exec(`
   CREATE TABLE IF NOT EXISTS ggsel_categories (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS ggsel_items (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS finance_accounts (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS transaction_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `);
 

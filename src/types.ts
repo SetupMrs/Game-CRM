@@ -370,6 +370,22 @@ export interface FinanceAccount {
   createdAt?: string;
 }
 
+// Шаблон повторюваної операції. Натискання на шаблон миттєво створює операцію
+// з цими полями й поточною датою. Шаблони — власні для кожного користувача.
+export interface TransactionTemplate {
+  id: string;
+  name: string;
+  ownerUserId: string;
+  type: TransactionType;
+  amount: number;
+  currency: string;
+  category: string;
+  description?: string;
+  counterparty?: string;
+  accountKey?: string; // ключ рахунку ("main:<uid>" або id додаткового), як у формі
+  createdAt?: string;
+}
+
 export interface DatabaseState {
   tasks: Task[];
   transactions: Transaction[];
@@ -381,6 +397,7 @@ export interface DatabaseState {
   ggselCategories: GgselCategory[];
   ggselItems: GgselWatchItem[];
   financeAccounts: FinanceAccount[];
+  transactionTemplates: TransactionTemplate[];
   baseCurrency: string; // валюта, до якої конвертуються всі підсумки (курс = 1)
   currencyRates: Record<string, number>; // "скільки baseCurrency коштує 1 одиниця валюти", ключ — код валюти
 }

@@ -19,9 +19,11 @@ import {
   CheckSquare as CheckSquareIcon,
   Truck,
   Users,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Copy,
+  X
 } from "lucide-react";
-import { Transaction, TransactionType, BudgetPlan, Task, Supplier, FinanceAccount } from "../types";
+import { Transaction, TransactionType, BudgetPlan, Task, Supplier, FinanceAccount, TransactionTemplate } from "../types";
 import { BasicUser } from "../apiClient";
 // jsPDF is loaded on demand (dynamic import) below, since it's fairly heavy
 // and only needed when the user actually exports a PDF report.
@@ -43,6 +45,9 @@ interface FinanceManagerProps {
   accounts?: FinanceAccount[]; // додаткові рахунки, які створюють користувачі
   onAddAccount?: (name: string) => void;
   onDeleteAccount?: (id: string) => void;
+  templates?: TransactionTemplate[]; // шаблони повторюваних операцій
+  onAddTemplate?: (data: Omit<TransactionTemplate, "id" | "ownerUserId" | "createdAt">) => void;
+  onDeleteTemplate?: (id: string) => void;
   baseCurrency?: string;
   currencyRates?: Record<string, number>;
   onUpdateCurrencyRates?: (rates: Record<string, number>) => void;
@@ -64,6 +69,9 @@ export default function FinanceManager({
   accounts = [],
   onAddAccount,
   onDeleteAccount,
+  templates = [],
+  onAddTemplate,
+  onDeleteTemplate,
   baseCurrency = "USD",
   currencyRates = { USD: 1 },
   onUpdateCurrencyRates,
@@ -437,6 +445,60 @@ export default function FinanceManager({
     onAddAccount(name);
     setNewAccountName("");
     setIsAddAccountOpen(false);
+  };
+
+  // --- Шаблони повторюваних операцій -----------------------------------------
+  // Показуємо власні шаблони поточного користувача.
+  const myTemplates = useMemo(
+    () => templates.filter(t => t.ownerUserId === currentUserId),
+    [templates, currentUserId]
+  );
+
+  // Натискання на шаблон миттєво створює операцію з поточною датою.
+  const handleCreateFromTemplate = (t: TransactionTemplate) => {
+    const key = t.accountKey || (currentUserId ? mainKey(currentUserId) : mainKey(undefined));
+    const target = keyToTxTarget(key);
+    onAddTransaction({
+      type: t.type,
+      amount: t.amount,
+      currency: t.currency,
+      category: t.category,
+      description: t.description || `Транзакція: ${t.category}`,
+      date: new Date().toISOString(),
+      counterparty: t.counterparty || undefined,
+      ...target
+    });
+  };
+
+  const emptyTpl = () => ({
+    name: "",
+    type: "Income" as TransactionType,
+    amount: "",
+    currency: FINANCE_DEFAULT_CURRENCY,
+    category: "",
+    description: "",
+    counterparty: "",
+    accountKey: currentUserId ? mainKey(currentUserId) : mainKey(undefined)
+  });
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [newTpl, setNewTpl] = useState(emptyTpl());
+
+  const handleSubmitTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = parseFloat(newTpl.amount);
+    if (!newTpl.name.trim() || isNaN(amt) || amt <= 0 || !onAddTemplate) return;
+    onAddTemplate({
+      name: newTpl.name.trim(),
+      type: newTpl.type,
+      amount: amt,
+      currency: newTpl.currency,
+      category: newTpl.category.trim() || (newTpl.type === "Income" ? "Дохід" : "Витрата"),
+      description: newTpl.description.trim() || undefined,
+      counterparty: newTpl.counterparty.trim() || undefined,
+      accountKey: newTpl.accountKey
+    });
+    setNewTpl(emptyTpl());
+    setIsTemplateModalOpen(false);
   };
 
   const [isSetBalanceOpen, setIsSetBalanceOpen] = useState(false);
@@ -1200,6 +1262,61 @@ export default function FinanceManager({
         </div>
       )}
 
+      {/* Transaction templates (quick repeat) */}
+      {onAddTemplate && currentUserId && (
+        <div className="bg-[#111112] p-5 rounded-xl border border-white/5 shadow-xs space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+              <Copy className="w-4 h-4 text-emerald-400" />
+              Шаблони операцій
+            </h4>
+            <button
+              onClick={() => { setNewTpl(emptyTpl()); setIsTemplateModalOpen(true); }}
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Новий шаблон
+            </button>
+          </div>
+
+          {myTemplates.length === 0 ? (
+            <p className="text-[11px] text-gray-500">
+              Немає шаблонів. Створіть шаблон для повторюваних операцій — потім натиск створює операцію з поточною датою.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {myTemplates.map(t => (
+                <div
+                  key={t.id}
+                  className="group flex items-center rounded-lg border border-white/10 bg-white/[0.02] hover:border-emerald-500/40 transition-all overflow-hidden"
+                >
+                  <button
+                    onClick={() => handleCreateFromTemplate(t)}
+                    className="flex items-center gap-2 pl-3 pr-2 py-2 cursor-pointer"
+                    title="Створити операцію з цього шаблону (поточна дата)"
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${t.type === "Income" ? "bg-emerald-400" : "bg-red-400"}`}></span>
+                    <span className="text-xs font-semibold text-white">{t.name}</span>
+                    <span className="text-[11px] font-mono text-gray-400">
+                      {t.type === "Income" ? "+" : "−"}{fmtAmount(t.amount)} {t.currency}
+                    </span>
+                  </button>
+                  {onDeleteTemplate && (
+                    <button
+                      onClick={() => onDeleteTemplate(t.id)}
+                      className="px-2 py-2 text-gray-600 hover:text-red-400 transition-colors cursor-pointer"
+                      title="Видалити шаблон"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* SVG Chart & Financial Trends */}
       {chartData.length >= 2 && svgChart ? (
         <div className="bg-[#111112] p-5 rounded-xl border border-white/5 shadow-xs space-y-4">
@@ -1909,6 +2026,132 @@ export default function FinanceManager({
                 >
                   {editingConversionId ? "Оновити" : "Зберегти конвертацію"}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* NEW TEMPLATE MODAL */}
+      {isTemplateModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111112] rounded-xl border border-white/5 shadow-2xl w-full max-w-md overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 bg-[#161618] border-b border-white/5 text-white flex justify-between items-center">
+              <h4 className="font-bold text-sm flex items-center gap-1.5">
+                <Copy className="w-4 h-4 text-emerald-300" />
+                Новий шаблон операції
+              </h4>
+              <button onClick={() => setIsTemplateModalOpen(false)} className="text-gray-400 hover:text-white text-lg cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSubmitTemplate} className="p-6 space-y-4 overflow-y-auto">
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Назва шаблону *</label>
+                <input
+                  type="text" required autoFocus maxLength={40}
+                  placeholder="напр. Оренда, Підписка, Зарплата"
+                  value={newTpl.name}
+                  onChange={(e) => setNewTpl({ ...newTpl, name: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+
+              {/* Type */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setNewTpl({ ...newTpl, type: "Income" })}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    newTpl.type === "Income" ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-white/[0.01] border-white/5 text-gray-400 hover:bg-white/5"
+                  }`}
+                >
+                  <ArrowUpRight className="w-4 h-4" /> Надходження
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewTpl({ ...newTpl, type: "Expense" })}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    newTpl.type === "Expense" ? "bg-red-500/10 border-red-500/30 text-red-400" : "bg-white/[0.01] border-white/5 text-gray-400 hover:bg-white/5"
+                  }`}
+                >
+                  <ArrowDownLeft className="w-4 h-4" /> Витрата
+                </button>
+              </div>
+
+              {/* Amount + currency */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Сума *</label>
+                  <input
+                    type="number" required min="0" step="0.01" placeholder="0.00"
+                    value={newTpl.amount}
+                    onChange={(e) => setNewTpl({ ...newTpl, amount: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Валюта</label>
+                  <select
+                    value={newTpl.currency}
+                    onChange={(e) => setNewTpl({ ...newTpl, currency: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                  >
+                    {currencyOptions.map(code => <option key={code} value={code}>{code}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Account */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Рахунок</label>
+                <select
+                  value={newTpl.accountKey}
+                  onChange={(e) => setNewTpl({ ...newTpl, accountKey: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
+                >
+                  {accountOptions.map(d => <option key={d.key} value={d.key}>{accountFullLabel(d.key)}</option>)}
+                </select>
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Категорія</label>
+                <input
+                  type="text" maxLength={40}
+                  placeholder="напр. Оренда"
+                  value={newTpl.category}
+                  onChange={(e) => setNewTpl({ ...newTpl, category: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+
+              {/* Counterparty */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Контрагент</label>
+                <input
+                  type="text" maxLength={60}
+                  placeholder="необовʼязково"
+                  value={newTpl.counterparty}
+                  onChange={(e) => setNewTpl({ ...newTpl, counterparty: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Опис</label>
+                <textarea
+                  rows={2}
+                  placeholder="необовʼязково"
+                  value={newTpl.description}
+                  onChange={(e) => setNewTpl({ ...newTpl, description: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                <button type="button" onClick={() => setIsTemplateModalOpen(false)} className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer">Скасувати</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer">Зберегти шаблон</button>
               </div>
             </form>
           </div>

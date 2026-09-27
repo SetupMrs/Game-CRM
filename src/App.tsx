@@ -20,7 +20,7 @@ import {
   Store,
   Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, FinanceAccount, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, FinanceAccount, TransactionTemplate, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate, computeGgselSuggestedPrice } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
@@ -64,6 +64,7 @@ const EMPTY_DB: DatabaseState = {
   ggselCategories: [],
   ggselItems: [],
   financeAccounts: [],
+  transactionTemplates: [],
   baseCurrency: DEFAULT_BASE_CURRENCY,
   currencyRates: { ...DEFAULT_CURRENCY_RATES }
 };
@@ -83,6 +84,7 @@ function normalizeDb(data: any): DatabaseState {
     ggselCategories: data?.ggselCategories || [],
     ggselItems: data?.ggselItems || [],
     financeAccounts: data?.financeAccounts || [],
+    transactionTemplates: data?.transactionTemplates || [],
     baseCurrency,
     currencyRates: (data?.currencyRates && typeof data.currencyRates === "object")
       ? { ...DEFAULT_CURRENCY_RATES, ...data.currencyRates, [baseCurrency]: 1 }
@@ -1590,6 +1592,40 @@ export default function App() {
     ));
   };
 
+  const handleAddTransactionTemplate = (data: Omit<TransactionTemplate, "id" | "ownerUserId" | "createdAt">) => {
+    const newTemplate: TransactionTemplate = {
+      ...data,
+      id: generateId("txtpl"),
+      ownerUserId: appUser?.id || "",
+      createdAt: new Date().toISOString()
+    };
+    const updated = {
+      ...db,
+      transactionTemplates: [...(db.transactionTemplates || []), newTemplate]
+    };
+    saveStateToDisk(withLog(
+      updated,
+      "Створив шаблон операції",
+      "transaction",
+      newTemplate.name,
+      `${newTemplate.type === "Income" ? "Дохід" : "Витрата"} · ${newTemplate.amount} ${newTemplate.currency}`
+    ));
+  };
+
+  const handleDeleteTransactionTemplate = (id: string) => {
+    const tpl = (db.transactionTemplates || []).find(t => t.id === id);
+    const updated = {
+      ...db,
+      transactionTemplates: (db.transactionTemplates || []).filter(t => t.id !== id)
+    };
+    saveStateToDisk(withLog(
+      updated,
+      "Видалив шаблон операції",
+      "transaction",
+      tpl?.name || id
+    ));
+  };
+
   const handleDeleteBudget = (id: string) => {
     const budget = (db.budgets || []).find(b => b.id === id);
     const updated = {
@@ -2061,6 +2097,9 @@ export default function App() {
                     accounts={db.financeAccounts || []}
                     onAddAccount={handleAddAccount}
                     onDeleteAccount={handleDeleteAccount}
+                    templates={db.transactionTemplates || []}
+                    onAddTemplate={handleAddTransactionTemplate}
+                    onDeleteTemplate={handleDeleteTransactionTemplate}
                     baseCurrency={db.baseCurrency || "USD"}
                     currencyRates={db.currencyRates || {}}
                     onUpdateCurrencyRates={handleUpdateCurrencyRates}
