@@ -21,7 +21,7 @@ import {
   Users,
   ArrowRightLeft
 } from "lucide-react";
-import { Transaction, TransactionType, BudgetPlan, Task, Supplier } from "../types";
+import { Transaction, TransactionType, BudgetPlan, Task, Supplier, FinanceAccount } from "../types";
 import { BasicUser } from "../apiClient";
 // jsPDF is loaded on demand (dynamic import) below, since it's fairly heavy
 // and only needed when the user actually exports a PDF report.
@@ -38,8 +38,11 @@ interface FinanceManagerProps {
   budgets?: BudgetPlan[];
   tasks?: Task[];
   suppliers?: Supplier[];
-  users?: BasicUser[]; // усі користувачі CRM — кожен має свій рахунок
+  users?: BasicUser[]; // усі користувачі CRM — кожен має свій «основний» рахунок
   currentUserId?: string | null; // хто зараз залогінений (рахунок за замовчуванням для нової операції)
+  accounts?: FinanceAccount[]; // додаткові рахунки, які створюють користувачі
+  onAddAccount?: (name: string) => void;
+  onDeleteAccount?: (id: string) => void;
   baseCurrency?: string;
   currencyRates?: Record<string, number>;
   onUpdateCurrencyRates?: (rates: Record<string, number>) => void;
@@ -58,6 +61,9 @@ export default function FinanceManager({
   suppliers = [],
   users = [],
   currentUserId = null,
+  accounts = [],
+  onAddAccount,
+  onDeleteAccount,
   baseCurrency = "USD",
   currencyRates = { USD: 1 },
   onUpdateCurrencyRates,
@@ -110,30 +116,83 @@ export default function FinanceManager({
   // Спеціальне значення фільтра/рахунку для операцій без прив'язки до користувача.
   const UNASSIGNED = "__unassigned__";
 
-  const accountLabel = (userId?: string): string => {
-    if (!userId) return "Без рахунку";
+  const ownerName = (userId?: string): string => {
+    if (!userId) return "";
     return userNameById[userId] || "Невідомий користувач";
   };
+
+  const MAIN_PREFIX = "main:";
+  const mainKey = (userId?: string): string => `${MAIN_PREFIX}${userId || UNASSIGNED}`;
 
   // Форматуємо число у стислому вигляді (без зайвих нулів), напр. 4100 / 12 400.5
   const fmtAmount = (n: number): string =>
     n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-  // Баланси по рахунках: для кожного користувача — скільки зараз лежить у кожній
-  // валюті. Дохід додає, витрата віднімає, конвертація переносить між валютами.
-  // Показуємо всім (прозоро) — рахунки всіх користувачів.
-  const accountBalances = useMemo(() => {
-    // userId (або UNASSIGNED) -> { currencyCode -> сума }
-    const byUser: Record<string, Record<string, number>> = {};
-    const ensure = (uid: string) => (byUser[uid] = byUser[uid] || {});
+  // Множина id справжніх додаткових рахунків (щоб відрізняти від «основних»).
+  const accountsById = useMemo(() => new Set(accounts.map(a => a.id)), [accounts]);
 
-    // Кожен користувач CRM отримує картку одразу, навіть без жодної операції —
-    // тоді кнопка «Встановити баланс» доступна з самого початку.
-    users.forEach(u => ensure(u.id));
+  // До якого рахунку належить операція: або її додатковий рахунок (accountId),
+  // або «основний» рахунок її користувача.
+  const resolveAccountKey = (tx: Transaction): string =>
+    (tx.accountId && accountsById.has(tx.accountId)) ? tx.accountId : mainKey(tx.userId);
+
+  // Опис усіх рахунків: у кожного користувача — «основний», плюс його додаткові.
+  const accountDescriptors = useMemo(() => {
+    const list: { key: string; name: string; ownerUserId: string; isMain: boolean }[] = [];
+    users.forEach(u => list.push({ key: mainKey(u.id), name: "Основний", ownerUserId: u.id, isMain: true }));
+    accounts.forEach(a => list.push({ key: a.id, name: a.name, ownerUserId: a.ownerUserId, isMain: false }));
+    return list;
+  }, [users, accounts]);
+
+  const descriptorByKey = useMemo(() => {
+    const m: Record<string, { key: string; name: string; ownerUserId: string; isMain: boolean }> = {};
+    accountDescriptors.forEach(d => { m[d.key] = d; });
+    return m;
+  }, [accountDescriptors]);
+
+  // Назва + власник рахунку за його ключем (для карток, форм, заголовків).
+  const accountDisplay = (key: string): { name: string; owner: string } => {
+    const d = descriptorByKey[key];
+    if (d) return { name: d.name, owner: ownerName(d.ownerUserId) };
+    if (key === mainKey(undefined)) return { name: "Без рахунку", owner: "" };
+    return { name: "Невідомий рахунок", owner: "" };
+  };
+
+  // Короткий підпис рахунку одним рядком (напр. «Alex · Основний»).
+  const accountFullLabel = (key: string): string => {
+    const { name, owner } = accountDisplay(key);
+    return owner ? `${owner} · ${name}` : name;
+  };
+
+  // Порядок рахунків для вибору у формі: спершу мої (основний, потім додаткові),
+  // далі інших користувачів.
+  const accountOptions = useMemo(() => {
+    const arr = [...accountDescriptors];
+    arr.sort((a, b) => {
+      const aMine = a.ownerUserId === currentUserId ? 0 : 1;
+      const bMine = b.ownerUserId === currentUserId ? 0 : 1;
+      if (aMine !== bMine) return aMine - bMine;
+      const byOwner = ownerName(a.ownerUserId).localeCompare(ownerName(b.ownerUserId));
+      if (byOwner !== 0) return byOwner;
+      if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return arr;
+  }, [accountDescriptors, currentUserId]);
+
+  // Баланси по рахунках: для кожного рахунку — скільки зараз лежить у кожній
+  // валюті. Дохід додає, витрата віднімає, конвертація переносить між валютами.
+  // Показуємо всім (прозоро) — рахунки всіх користувачів, але кожен окремо.
+  const accountBalances = useMemo(() => {
+    const byKey: Record<string, Record<string, number>> = {};
+    const ensure = (k: string) => (byKey[k] = byKey[k] || {});
+
+    // Кожен рахунок (основний кожного користувача + усі додаткові) отримує картку
+    // одразу, навіть без операцій — тоді кнопки доступні з самого початку.
+    accountDescriptors.forEach(d => ensure(d.key));
 
     for (const tx of transactions) {
-      const uid = tx.userId || UNASSIGNED;
-      const bucket = ensure(uid);
+      const bucket = ensure(resolveAccountKey(tx));
       const cur = (tx.currency || baseCurrency).toUpperCase();
       const amt = Number(tx.amount) || 0;
       if (tx.conversion) {
@@ -148,25 +207,37 @@ export default function FinanceManager({
       }
     }
 
-    // Формуємо впорядкований список: спершу реальні користувачі (за іменем),
-    // потім «Без рахунку», якщо там щось є.
-    const rows = Object.entries(byUser).map(([uid, currencies]) => {
-      // прибираємо нульові валюти, щоб не засмічувати картку
+    const rows = Object.entries(byKey).map(([key, currencies]) => {
       const cleaned: Record<string, number> = {};
       for (const [code, val] of Object.entries(currencies)) {
         if (Math.abs(val) > 0.000001) cleaned[code] = val;
       }
-      return { userId: uid, label: accountLabel(uid === UNASSIGNED ? undefined : uid), currencies: cleaned };
+      const d = descriptorByKey[key];
+      const disp = accountDisplay(key);
+      return {
+        key,
+        name: disp.name,
+        owner: disp.owner,
+        ownerUserId: d?.ownerUserId || "",
+        isMain: d ? d.isMain : true,
+        currencies: cleaned
+      };
     });
 
+    // Групуємо за власником (за іменем), усередині — основний перший, потім
+    // додаткові за назвою; «Без рахунку» — в кінці.
+    const isUnassigned = (k: string) => k === mainKey(undefined);
     rows.sort((a, b) => {
-      if (a.userId === UNASSIGNED) return 1;
-      if (b.userId === UNASSIGNED) return -1;
-      return a.label.localeCompare(b.label);
+      if (isUnassigned(a.key)) return 1;
+      if (isUnassigned(b.key)) return -1;
+      const byOwner = a.owner.localeCompare(b.owner);
+      if (byOwner !== 0) return byOwner;
+      if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+      return a.name.localeCompare(b.name);
     });
 
     return rows;
-  }, [transactions, users, baseCurrency]);
+  }, [transactions, accountDescriptors, descriptorByKey, accountsById, baseCurrency]);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -225,7 +296,7 @@ export default function FinanceManager({
     counterparty: "",
     taskId: "",
     supplierId: "",
-    userId: currentUserId || ""
+    accountKey: currentUserId ? mainKey(currentUserId) : mainKey(undefined)
   });
 
   // Report Modal state
@@ -320,12 +391,22 @@ export default function FinanceManager({
   })();
 
   // --- Встановити / скоригувати баланс рахунку ---------------------------------
-  // Поточний обчислений баланс рахунку в конкретній валюті (те, що видно на картці).
-  const currentBalanceFor = (userId: string, currencyCode: string): number => {
+  // Поточний обчислений баланс рахунку (за ключем) у конкретній валюті.
+  const currentBalanceFor = (accountKey: string, currencyCode: string): number => {
     const code = (currencyCode || baseCurrency).toUpperCase();
-    const row = accountBalances.find(r => r.userId === (userId || UNASSIGNED));
+    const row = accountBalances.find(r => r.key === accountKey);
     if (!row) return 0;
     return row.currencies[code] || 0;
+  };
+
+  // Розкладаємо ключ рахунку на userId + accountId для збереження в операції.
+  const keyToTxTarget = (accountKey: string): { userId?: string; accountId?: string } => {
+    if (accountKey.startsWith(MAIN_PREFIX)) {
+      const uid = accountKey.slice(MAIN_PREFIX.length);
+      return { userId: uid === UNASSIGNED ? undefined : uid, accountId: undefined };
+    }
+    const d = descriptorByKey[accountKey];
+    return { userId: d?.ownerUserId || undefined, accountId: accountKey };
   };
 
   const currencyOptions = useMemo(() => {
@@ -346,43 +427,56 @@ export default function FinanceManager({
   const viewRate = currencyRates[effectiveViewCurrency] || 1;
   const toView = (baseAmount: number): number => baseAmount / viewRate;
 
+  const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
+  const [newAccountName, setNewAccountName] = useState("");
+
+  const handleSubmitNewAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newAccountName.trim();
+    if (!name || !onAddAccount) return;
+    onAddAccount(name);
+    setNewAccountName("");
+    setIsAddAccountOpen(false);
+  };
+
   const [isSetBalanceOpen, setIsSetBalanceOpen] = useState(false);
-  const [sbUserId, setSbUserId] = useState<string>("");
+  const [sbAccountKey, setSbAccountKey] = useState<string>("");
   const [sbCurrency, setSbCurrency] = useState<string>(baseCurrency);
   const [sbAmount, setSbAmount] = useState<string>("");
 
-  const handleOpenSetBalance = (userId: string) => {
+  const handleOpenSetBalance = (accountKey: string) => {
     // За замовчуванням — перша валюта, що вже є на рахунку, інакше базова.
-    const row = accountBalances.find(r => r.userId === userId);
+    const row = accountBalances.find(r => r.key === accountKey);
     const existingCodes = row ? Object.keys(row.currencies) : [];
     const cur = (existingCodes[0] || FINANCE_DEFAULT_CURRENCY).toUpperCase();
-    setSbUserId(userId);
+    setSbAccountKey(accountKey);
     setSbCurrency(cur);
-    setSbAmount(String(currentBalanceFor(userId, cur)));
+    setSbAmount(String(currentBalanceFor(accountKey, cur)));
     setIsSetBalanceOpen(true);
   };
 
   const handleCloseSetBalance = () => {
     setIsSetBalanceOpen(false);
-    setSbUserId("");
+    setSbAccountKey("");
     setSbAmount("");
   };
 
   const handleChangeSbCurrency = (code: string) => {
     setSbCurrency(code);
     // Підставляємо поточний баланс обраної валюти, щоб було видно, від чого рахуємо.
-    setSbAmount(String(currentBalanceFor(sbUserId, code)));
+    setSbAmount(String(currentBalanceFor(sbAccountKey, code)));
   };
 
-  const sbCurrent = sbUserId ? currentBalanceFor(sbUserId, sbCurrency) : 0;
+  const sbCurrent = sbAccountKey ? currentBalanceFor(sbAccountKey, sbCurrency) : 0;
   const sbTarget = parseFloat(sbAmount);
   const sbDelta = isFinite(sbTarget) ? Math.round((sbTarget - sbCurrent) * 100) / 100 : 0;
 
   const handleSaveSetBalance = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sbUserId) return;
+    if (!sbAccountKey) return;
     if (!isFinite(sbTarget) || sbTarget < 0) return;
     if (Math.abs(sbDelta) < 0.005) { handleCloseSetBalance(); return; } // вже стільки — нічого не робимо
+    const target = keyToTxTarget(sbAccountKey);
     onAddTransaction({
       type: (sbDelta > 0 ? "Income" : "Expense") as TransactionType,
       amount: Math.abs(sbDelta),
@@ -390,7 +484,8 @@ export default function FinanceManager({
       category: BALANCE_ADJUST_CATEGORY,
       description: `Встановлено баланс: ${fmtAmount(sbTarget)} ${sbCurrency}`,
       date: new Date().toISOString(),
-      userId: sbUserId,
+      userId: target.userId,
+      accountId: target.accountId,
       balanceAdjustment: true
     });
     handleCloseSetBalance();
@@ -478,13 +573,9 @@ export default function FinanceManager({
       result = result.filter(tx => tx.category === categoryFilter);
     }
 
-    // Account filter (за конкретним рахунком/користувачем)
+    // Account filter (за конкретним рахунком — кожен переглядається окремо)
     if (accountFilter !== "All") {
-      if (accountFilter === UNASSIGNED) {
-        result = result.filter(tx => !tx.userId);
-      } else {
-        result = result.filter(tx => tx.userId === accountFilter);
-      }
+      result = result.filter(tx => resolveAccountKey(tx) === accountFilter);
     }
 
     // Period filter
@@ -568,7 +659,7 @@ export default function FinanceManager({
       counterparty: tx.counterparty || "",
       taskId: tx.taskId || "",
       supplierId: tx.supplierId || "",
-      userId: tx.userId || ""
+      accountKey: resolveAccountKey(tx)
     });
     setIsFormOpen(true);
   };
@@ -586,7 +677,7 @@ export default function FinanceManager({
       counterparty: "",
       taskId: "",
       supplierId: "",
-      userId: currentUserId || ""
+      accountKey: currentUserId ? mainKey(currentUserId) : mainKey(undefined)
     });
   };
 
@@ -607,7 +698,7 @@ export default function FinanceManager({
         counterparty: newTx.counterparty.trim() || undefined,
         taskId: newTx.taskId || undefined,
         supplierId: newTx.supplierId || undefined,
-        userId: newTx.userId || undefined
+        ...keyToTxTarget(newTx.accountKey)
       });
       setEditingTx(null);
     } else {
@@ -621,7 +712,7 @@ export default function FinanceManager({
         counterparty: newTx.counterparty.trim() || undefined,
         taskId: newTx.taskId || undefined,
         supplierId: newTx.supplierId || undefined,
-        userId: newTx.userId || undefined
+        ...keyToTxTarget(newTx.accountKey)
       });
     }
 
@@ -636,7 +727,7 @@ export default function FinanceManager({
       counterparty: "",
       taskId: "",
       supplierId: "",
-      userId: currentUserId || ""
+      accountKey: currentUserId ? mainKey(currentUserId) : mainKey(undefined)
     });
     setIsFormOpen(false);
   };
@@ -998,7 +1089,7 @@ export default function FinanceManager({
         </div>
       </div>
 
-      {/* Accounts (per-user balances) */}
+      {/* Accounts (per-account balances) */}
       {accountBalances.length > 0 && (
         <div className="bg-[#111112] p-5 rounded-xl border border-white/5 shadow-xs space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1006,25 +1097,39 @@ export default function FinanceManager({
               <Users className="w-4 h-4 text-emerald-400" />
               Рахунки
             </h4>
-            {accountFilter !== "All" && (
-              <button
-                onClick={() => setAccountFilter("All")}
-                className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
-              >
-                ✕ Показати всі операції
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {accountFilter !== "All" && (
+                <button
+                  onClick={() => setAccountFilter("All")}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
+                >
+                  ✕ Показати всі операції
+                </button>
+              )}
+              {onAddAccount && currentUserId && (
+                <button
+                  onClick={() => { setNewAccountName(""); setIsAddAccountOpen(true); }}
+                  className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Новий рахунок
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {accountBalances.map(acc => {
-              const selected = accountFilter === acc.userId;
+              const selected = accountFilter === acc.key;
+              const isUnassigned = acc.key === mainKey(undefined);
+              const canManage = !!acc.ownerUserId; // основний користувача або додатковий
+              const canDelete = !acc.isMain && acc.ownerUserId === currentUserId && Object.keys(acc.currencies).length === 0;
               const currencyList = Object.entries(acc.currencies).sort((a, b) =>
                 a[0] === baseCurrency ? -1 : b[0] === baseCurrency ? 1 : a[0].localeCompare(b[0])
               );
               return (
                 <div
-                  key={acc.userId}
+                  key={acc.key}
                   className={`flex flex-col p-4 rounded-xl border transition-all ${
                     selected
                       ? "border-emerald-500/40 bg-emerald-500/[0.06] ring-1 ring-emerald-500/30"
@@ -1032,19 +1137,26 @@ export default function FinanceManager({
                   }`}
                 >
                   <div
-                    onClick={() => setAccountFilter(selected ? "All" : acc.userId)}
+                    onClick={() => setAccountFilter(selected ? "All" : acc.key)}
                     className="text-left cursor-pointer"
                     title="Показати операції цього рахунку"
                   >
                     <div className="flex items-center gap-2 mb-2.5">
                       <div className={`p-1.5 rounded-lg border ${
-                        acc.userId === UNASSIGNED
+                        isUnassigned
                           ? "bg-gray-500/10 text-gray-400 border-gray-500/20"
-                          : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : acc.isMain
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                            : "bg-sky-500/10 text-sky-400 border-sky-500/20"
                       }`}>
                         <Wallet className="w-4 h-4" />
                       </div>
-                      <span className="text-sm font-bold text-white truncate">{acc.label}</span>
+                      <div className="min-w-0">
+                        {acc.owner && (
+                          <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-wider truncate">{acc.owner}</p>
+                        )}
+                        <span className="text-sm font-bold text-white truncate block">{acc.name}</span>
+                      </div>
                     </div>
                     {currencyList.length === 0 ? (
                       <p className="text-xs text-gray-500 font-mono">0</p>
@@ -1061,14 +1173,25 @@ export default function FinanceManager({
                       </div>
                     )}
                   </div>
-                  {acc.userId !== UNASSIGNED && (
-                    <button
-                      onClick={() => handleOpenSetBalance(acc.userId)}
-                      className="mt-3 pt-3 border-t border-white/5 flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 hover:text-emerald-400 transition-colors cursor-pointer"
-                    >
-                      <Wallet className="w-3 h-3" />
-                      Встановити баланс
-                    </button>
+                  {canManage && (
+                    <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => handleOpenSetBalance(acc.key)}
+                        className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 hover:text-emerald-400 transition-colors cursor-pointer"
+                      >
+                        <Wallet className="w-3 h-3" />
+                        Встановити баланс
+                      </button>
+                      {canDelete && onDeleteAccount && (
+                        <button
+                          onClick={() => onDeleteAccount(acc.key)}
+                          className="text-[11px] font-semibold text-gray-500 hover:text-red-400 transition-colors cursor-pointer"
+                          title="Видалити порожній рахунок"
+                        >
+                          Видалити
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -1291,10 +1414,10 @@ export default function FinanceManager({
                           )}
                         </td>
                         <td className="px-5 py-3.5">
-                          {tx.userId ? (
+                          {(tx.userId || tx.accountId) ? (
                             <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-200">
-                              <Users className="w-3 h-3 text-emerald-400/80" />
-                              {accountLabel(tx.userId)}
+                              <Wallet className="w-3 h-3 text-emerald-400/80" />
+                              {accountFullLabel(resolveAccountKey(tx))}
                             </span>
                           ) : (
                             <span className="text-[11px] text-gray-600">Без рахунку</span>
@@ -1404,13 +1527,12 @@ export default function FinanceManager({
                   Рахунок
                 </label>
                 <select
-                  value={newTx.userId}
-                  onChange={(e) => setNewTx({ ...newTx, userId: e.target.value })}
+                  value={newTx.accountKey}
+                  onChange={(e) => setNewTx({ ...newTx, accountKey: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
                 >
-                  <option value="">Без рахунку</option>
-                  {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.username}</option>
+                  {accountOptions.map(d => (
+                    <option key={d.key} value={d.key}>{accountFullLabel(d.key)}</option>
                   ))}
                 </select>
               </div>
@@ -1794,6 +1916,55 @@ export default function FinanceManager({
         </div>
       )}
 
+      {/* NEW ACCOUNT MODAL */}
+      {isAddAccountOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50">
+          <div className="bg-[#111112] rounded-xl border border-white/5 shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 bg-[#161618] border-b border-white/5 text-white flex justify-between items-center">
+              <h4 className="font-bold text-sm flex items-center gap-1.5">
+                <Wallet className="w-4 h-4 text-sky-300" />
+                Новий рахунок
+              </h4>
+              <button onClick={() => setIsAddAccountOpen(false)} className="text-gray-400 hover:text-white text-lg cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSubmitNewAccount} className="p-6 space-y-4">
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Додатковий рахунок рахується окремо, зі своїм балансом. Він буде вашим — операції на нього обираєте у формі. Бачать усі, але кожен рахунок дивляться окремо.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Назва рахунку *</label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  maxLength={40}
+                  placeholder="напр. Резерв, Реклама, Каса №2"
+                  value={newAccountName}
+                  onChange={(e) => setNewAccountName(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddAccountOpen(false)}
+                  className="px-4 py-2 border border-white/10 rounded-lg text-xs font-semibold hover:bg-white/5 text-gray-400 cursor-pointer"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Створити
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* SET / ADJUST ACCOUNT BALANCE MODAL */}
       {isSetBalanceOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50">
@@ -1801,7 +1972,7 @@ export default function FinanceManager({
             <div className="px-6 py-4 bg-[#161618] border-b border-white/5 text-white flex justify-between items-center">
               <h4 className="font-bold text-sm flex items-center gap-1.5">
                 <Wallet className="w-4 h-4 text-sky-300" />
-                Встановити баланс — {accountLabel(sbUserId)}
+                Встановити баланс — {accountFullLabel(sbAccountKey)}
               </h4>
               <button onClick={handleCloseSetBalance} className="text-gray-400 hover:text-white text-lg cursor-pointer">✕</button>
             </div>

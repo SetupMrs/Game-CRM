@@ -179,6 +179,9 @@ export interface Transaction {
   // але вона НЕ рахується як реальний дохід/витрата у підсумках, звітах,
   // графіку та на дашборді (це не заробіток, а фіксація наявного залишку).
   balanceAdjustment?: boolean;
+  // ID додаткового рахунку (FinanceAccount), якщо операція на нього. Якщо порожньо —
+  // операція належить «основному» рахунку користувача (визначається за userId).
+  accountId?: string;
   deletedAt?: string; // якщо задано — транзакція у кошику
 }
 
@@ -356,6 +359,17 @@ export interface TaskTemplate {
   tags?: string[];
 }
 
+// Додатковий рахунок у Фінансах. Належить конкретному користувачу (ownerUserId),
+// який його створив. У кожного користувача є ще неявний «основний» рахунок —
+// туди йдуть операції без accountId. Додаткові рахунки бачать усі, але кожен
+// переглядається окремо (свій баланс і свої операції).
+export interface FinanceAccount {
+  id: string;
+  name: string;
+  ownerUserId: string;
+  createdAt?: string;
+}
+
 export interface DatabaseState {
   tasks: Task[];
   transactions: Transaction[];
@@ -366,6 +380,7 @@ export interface DatabaseState {
   steamWatches: SteamWatchItem[];
   ggselCategories: GgselCategory[];
   ggselItems: GgselWatchItem[];
+  financeAccounts: FinanceAccount[];
   baseCurrency: string; // валюта, до якої конвертуються всі підсумки (курс = 1)
   currencyRates: Record<string, number>; // "скільки baseCurrency коштує 1 одиниця валюти", ключ — код валюти
 }

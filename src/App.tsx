@@ -20,7 +20,7 @@ import {
   Store,
   Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, FinanceAccount, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate, computeGgselSuggestedPrice } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
@@ -63,6 +63,7 @@ const EMPTY_DB: DatabaseState = {
   steamWatches: [],
   ggselCategories: [],
   ggselItems: [],
+  financeAccounts: [],
   baseCurrency: DEFAULT_BASE_CURRENCY,
   currencyRates: { ...DEFAULT_CURRENCY_RATES }
 };
@@ -81,6 +82,7 @@ function normalizeDb(data: any): DatabaseState {
     steamWatches: data?.steamWatches || [],
     ggselCategories: data?.ggselCategories || [],
     ggselItems: data?.ggselItems || [],
+    financeAccounts: data?.financeAccounts || [],
     baseCurrency,
     currencyRates: (data?.currencyRates && typeof data.currencyRates === "object")
       ? { ...DEFAULT_CURRENCY_RATES, ...data.currencyRates, [baseCurrency]: 1 }
@@ -1548,6 +1550,46 @@ export default function App() {
     ));
   };
 
+  const handleAddAccount = (name: string) => {
+    const clean = name.trim();
+    if (!clean) return;
+    const newAccount: FinanceAccount = {
+      id: generateId("acct"),
+      name: clean,
+      ownerUserId: appUser?.id || "",
+      createdAt: new Date().toISOString()
+    };
+    const updated = {
+      ...db,
+      financeAccounts: [...(db.financeAccounts || []), newAccount]
+    };
+    saveStateToDisk(withLog(
+      updated,
+      "Створив рахунок",
+      "transaction",
+      newAccount.name,
+      "Додатковий рахунок у Фінансах"
+    ));
+  };
+
+  const handleDeleteAccount = (id: string) => {
+    // Захист: не видаляємо рахунок, поки на ньому є операції.
+    const hasTx = (db.transactions || []).some(t => t.accountId === id);
+    if (hasTx) return;
+    const account = (db.financeAccounts || []).find(a => a.id === id);
+    const updated = {
+      ...db,
+      financeAccounts: (db.financeAccounts || []).filter(a => a.id !== id)
+    };
+    saveStateToDisk(withLog(
+      updated,
+      "Видалив рахунок",
+      "transaction",
+      account?.name || id,
+      "Додатковий рахунок у Фінансах"
+    ));
+  };
+
   const handleDeleteBudget = (id: string) => {
     const budget = (db.budgets || []).find(b => b.id === id);
     const updated = {
@@ -2016,6 +2058,9 @@ export default function App() {
                     suppliers={visibleSuppliers}
                     users={assignableUsers}
                     currentUserId={appUser?.id || null}
+                    accounts={db.financeAccounts || []}
+                    onAddAccount={handleAddAccount}
+                    onDeleteAccount={handleDeleteAccount}
                     baseCurrency={db.baseCurrency || "USD"}
                     currencyRates={db.currencyRates || {}}
                     onUpdateCurrencyRates={handleUpdateCurrencyRates}
