@@ -190,29 +190,29 @@ export default function OrdersManager({
               {/* Fields (inline): замовник → номінал → номер → ІД → ключ */}
               <div className="space-y-0.5 text-xs">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Замовник</span>
-                  <span className="font-semibold text-white truncate" title={o.customerNick}>{o.customerNick || "—"}</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">Замовник</span>
+                  <span className="font-semibold text-white truncate min-w-0 flex-1" title={o.customerNick}>{o.customerNick || "—"}</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Номінал</span>
-                  <span className="text-gray-200 truncate" title={o.nominal}>{o.nominal || "—"}</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">Номінал</span>
+                  <span className="text-gray-200 truncate min-w-0 flex-1" title={o.nominal}>{o.nominal || "—"}</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Номер</span>
-                  <span className="font-mono text-gray-300 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">Номер</span>
+                  <span className="font-mono text-gray-300 truncate min-w-0 flex-1" title={o.orderNumber}>{o.orderNumber || "—"}</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">ІД</span>
-                  <span className="font-mono text-gray-300 truncate" title={o.orderId}>{o.orderId || "—"}</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">ІД</span>
+                  <span className="font-mono text-gray-300 truncate min-w-0 flex-1" title={o.orderId}>{o.orderId || "—"}</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Ключ</span>
-                  <span className="font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">Ключ</span>
+                  <span className="font-mono text-gray-400 truncate min-w-0 flex-1" title={o.key}>{o.key || "—"}</span>
                 </div>
                 {o.problem && (
                   <div className="flex items-baseline gap-2">
-                    <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Проблема</span>
-                    <span className="text-gray-300 line-clamp-2" title={o.problem}>{o.problem}</span>
+                    <span className="text-[10px] text-gray-500 uppercase tracking-normal w-[84px] shrink-0">Проблема</span>
+                    <span className="text-gray-300 line-clamp-2 min-w-0 flex-1" title={o.problem}>{o.problem}</span>
                   </div>
                 )}
               </div>
