@@ -155,16 +155,16 @@ export default function OrdersManager({
           Замовлень за обраними фільтрами не знайдено.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map(o => (
-            <div key={o.id} className="bg-[#111112] rounded-xl border border-white/5 shadow-xs p-4 flex flex-col gap-3 hover:border-white/15 transition-all">
+            <div key={o.id} className="bg-[#111112] rounded-lg border border-white/5 shadow-xs p-3 flex flex-col gap-2 hover:border-white/15 transition-all">
               {/* Top: single (editable) status + API + actions */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                   <select
                     value={o.status}
                     onChange={(e) => onUpdateOrder(o.id, { status: e.target.value as OrderStatus })}
-                    className={`text-[11px] font-bold px-2 py-1 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
                     title="Змінити статус"
                   >
                     {ORDER_STATUSES.map(s => (
@@ -172,67 +172,52 @@ export default function OrdersManager({
                     ))}
                   </select>
                   {o.api && (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border border-white/10 text-gray-300 bg-white/[0.02]">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md border border-white/10 text-gray-300 bg-white/[0.02]">
                       {o.api}
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => openEdit(o)}
-                    className="p-1.5 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md cursor-pointer"
-                    title="Редагувати"
-                  >
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button onClick={() => openEdit(o)} className="p-1 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md cursor-pointer" title="Редагувати">
                     <Pencil className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={() => onDeleteOrder(o.id)}
-                    className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md cursor-pointer"
-                    title="Видалити"
-                  >
+                  <button onClick={() => onDeleteOrder(o.id)} className="p-1 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md cursor-pointer" title="Видалити">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
 
-              {/* Fields: замовник → номінал → номер → ІД → ключ */}
-              <div className="space-y-2">
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Замовник</p>
-                  <p className="text-sm font-bold text-white truncate" title={o.customerNick}>{o.customerNick || "—"}</p>
+              {/* Fields (inline): замовник → номінал → номер → ІД → ключ */}
+              <div className="space-y-0.5 text-xs">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Замовник</span>
+                  <span className="font-semibold text-white truncate" title={o.customerNick}>{o.customerNick || "—"}</span>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Номінал</p>
-                  <p className="text-sm font-semibold text-gray-200 leading-snug break-words">{o.nominal || "—"}</p>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Номінал</span>
+                  <span className="text-gray-200 truncate" title={o.nominal}>{o.nominal || "—"}</span>
                 </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-2 pt-1">
-                  <div className="min-w-0">
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Номер</p>
-                    <p className="text-xs font-mono text-gray-300 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</p>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">ІД</p>
-                    <p className="text-xs font-mono text-gray-300 truncate" title={o.orderId}>{o.orderId || "—"}</p>
-                  </div>
-                  <div className="col-span-2 min-w-0">
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ключ</p>
-                    <p className="text-xs font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</p>
-                  </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Номер</span>
+                  <span className="font-mono text-gray-300 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</span>
                 </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">ІД</span>
+                  <span className="font-mono text-gray-300 truncate" title={o.orderId}>{o.orderId || "—"}</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Ключ</span>
+                  <span className="font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</span>
+                </div>
+                {o.problem && (
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-[10px] text-gray-500 uppercase tracking-wider w-16 shrink-0">Проблема</span>
+                    <span className="text-gray-300 line-clamp-2" title={o.problem}>{o.problem}</span>
+                  </div>
+                )}
               </div>
 
-              {/* Проблема */}
-              {o.problem && (
-                <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Проблема</p>
-                  <p className="text-xs text-gray-300 whitespace-pre-wrap break-words">{o.problem}</p>
-                </div>
-              )}
-
-              {/* Footer: date only */}
-              <div className="flex items-center justify-end gap-2 pt-1 mt-auto border-t border-white/5">
-                <span className="text-[11px] text-gray-500">{formatDate(o.createdAt)}</span>
-              </div>
+              <span className="text-[10px] text-gray-600 text-right">{formatDate(o.createdAt)}</span>
             </div>
           ))}
         </div>
