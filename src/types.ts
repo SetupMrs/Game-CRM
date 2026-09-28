@@ -386,6 +386,23 @@ export interface TransactionTemplate {
   createdAt?: string;
 }
 
+// Проблемне замовлення на сторінці «Замовлення».
+export type OrderStatus = "Прийнято" | "В обробці" | "Завершено";
+export const ORDER_STATUSES: OrderStatus[] = ["Прийнято", "В обробці", "Завершено"];
+
+export interface ProblemOrder {
+  id: string;
+  api: string;           // який API
+  orderNumber: string;   // номер замовлення
+  orderId: string;       // ID замовлення
+  key: string;           // ключ
+  customerNick: string;  // нік замовника
+  problem: string;       // опис проблеми
+  status: OrderStatus;
+  createdAt: string;
+  createdBy?: string;    // хто додав
+}
+
 export interface DatabaseState {
   tasks: Task[];
   transactions: Transaction[];
@@ -398,6 +415,7 @@ export interface DatabaseState {
   ggselItems: GgselWatchItem[];
   financeAccounts: FinanceAccount[];
   transactionTemplates: TransactionTemplate[];
+  orders: ProblemOrder[];
   baseCurrency: string; // валюта, до якої конвертуються всі підсумки (курс = 1)
   currencyRates: Record<string, number>; // "скільки baseCurrency коштує 1 одиниця валюти", ключ — код валюти
 }

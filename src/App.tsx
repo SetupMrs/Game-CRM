@@ -18,9 +18,10 @@ import {
   TrendingUp,
   LineChart,
   Store,
+  ClipboardList,
   Search
 } from "lucide-react";
-import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, FinanceAccount, TransactionTemplate, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
+import { Task, Transaction, DatabaseState, Supplier, ProductCard, CategoryItem, ActivityLogEntry, ActivityEntityType, BudgetPlan, TaskTemplate, TaskStatus, RecurrenceFrequency, TASK_STATUS_CONFIGS, PriceHistoryEntry, SteamWatchItem, GgselCategory, GgselWatchItem, FinanceAccount, TransactionTemplate, ProblemOrder, DEFAULT_CURRENCY_RATES, DEFAULT_BASE_CURRENCY } from "./types";
 import { generateId, formatDate, computeGgselSuggestedPrice } from "./utils";
 import { apiFetch, fetchCurrentUser, logout, listBasicUsers, AppUser, BasicUser, LetsKeysVariation, AUTH_REQUIRED_EVENT } from "./apiClient";
 import LoginGate from "./components/LoginGate";
@@ -36,6 +37,7 @@ const FinanceManager = lazy(() => import("./components/FinanceManager"));
 const SupplierManager = lazy(() => import("./components/SupplierManager"));
 const PricesManager = lazy(() => import("./components/PricesManager"));
 const GgselManager = lazy(() => import("./components/GgselManager"));
+const OrdersManager = lazy(() => import("./components/OrdersManager"));
 
 const NOTIFICATIONS_ENABLED_KEY = "game_crm_notifications_enabled";
 const LAST_NOTIFIED_DATE_KEY = "game_crm_last_notified_date";
@@ -65,6 +67,7 @@ const EMPTY_DB: DatabaseState = {
   ggselItems: [],
   financeAccounts: [],
   transactionTemplates: [],
+  orders: [],
   baseCurrency: DEFAULT_BASE_CURRENCY,
   currencyRates: { ...DEFAULT_CURRENCY_RATES }
 };
@@ -85,6 +88,7 @@ function normalizeDb(data: any): DatabaseState {
     ggselItems: data?.ggselItems || [],
     financeAccounts: data?.financeAccounts || [],
     transactionTemplates: data?.transactionTemplates || [],
+    orders: data?.orders || [],
     baseCurrency,
     currencyRates: (data?.currencyRates && typeof data.currencyRates === "object")
       ? { ...DEFAULT_CURRENCY_RATES, ...data.currencyRates, [baseCurrency]: 1 }
@@ -177,7 +181,7 @@ export default function App() {
   // Global Database State
   const [db, setDb] = useState<DatabaseState>(EMPTY_DB);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices" | "ggsel">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices" | "ggsel" | "orders">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
   const [serverError, setServerError] = useState<string | null>(null);
   const [backupFeedback, setBackupFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
@@ -1626,6 +1630,49 @@ export default function App() {
     ));
   };
 
+  const handleAddOrder = (data: Omit<ProblemOrder, "id" | "createdAt" | "createdBy">) => {
+    const newOrder: ProblemOrder = {
+      ...data,
+      id: generateId("order"),
+      createdAt: new Date().toISOString(),
+      createdBy: appUser?.id || ""
+    };
+    const updated = { ...db, orders: [...(db.orders || []), newOrder] };
+    saveStateToDisk(withLog(
+      updated,
+      "Додав замовлення",
+      "transaction",
+      newOrder.orderNumber || newOrder.orderId || newOrder.id,
+      `${newOrder.api ? newOrder.api + " · " : ""}${newOrder.status}`
+    ));
+  };
+
+  const handleUpdateOrder = (id: string, data: Partial<ProblemOrder>) => {
+    const updated = {
+      ...db,
+      orders: (db.orders || []).map(o => o.id === id ? { ...o, ...data } : o)
+    };
+    const o = (db.orders || []).find(x => x.id === id);
+    saveStateToDisk(withLog(
+      updated,
+      "Оновив замовлення",
+      "transaction",
+      o?.orderNumber || o?.orderId || id,
+      data.status ? `Статус: ${data.status}` : undefined
+    ));
+  };
+
+  const handleDeleteOrder = (id: string) => {
+    const o = (db.orders || []).find(x => x.id === id);
+    const updated = { ...db, orders: (db.orders || []).filter(x => x.id !== id) };
+    saveStateToDisk(withLog(
+      updated,
+      "Видалив замовлення",
+      "transaction",
+      o?.orderNumber || o?.orderId || id
+    ));
+  };
+
   const handleDeleteBudget = (id: string) => {
     const budget = (db.budgets || []).find(b => b.id === id);
     const updated = {
@@ -2048,6 +2095,17 @@ export default function App() {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab("orders")}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+              activeTab === "orders"
+                ? "bg-emerald-600 text-white"
+                : "text-gray-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            Замовлення
+          </button>
         </div>
 
         {/* Loading Spinner */}
@@ -2192,6 +2250,14 @@ export default function App() {
                     onSyncOneSteamWatch={handleSyncOneSteamWatch}
                     onFillMissingWithLetsKeys={handleFillMissingWithLetsKeys}
                     onLookupOrAddSteamWatch={handleLookupOrAddSteamWatch}
+                  />
+                )}
+                {activeTab === "orders" && (
+                  <OrdersManager
+                    orders={db.orders || []}
+                    onAddOrder={handleAddOrder}
+                    onUpdateOrder={handleUpdateOrder}
+                    onDeleteOrder={handleDeleteOrder}
                   />
                 )}
                 </Suspense>
