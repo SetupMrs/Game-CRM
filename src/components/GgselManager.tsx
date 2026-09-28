@@ -86,6 +86,25 @@ function resolveGgselPriceSource(
   };
 }
 
+// Жива назва позиції — тягнеться напряму з "Товари" (номінал/продукт) або зі
+// Steam-спостереження, тож перейменування продукту одразу відображається в
+// калькуляторі. Збережена item.title лишається лише запасним варіантом.
+function liveGgselItemTitle(
+  item: GgselWatchItem,
+  steamWatches: SteamWatchItem[],
+  suppliers: Supplier[]
+): string {
+  if (item.sourceType === "catalog") {
+    const supplier = suppliers.find(s => s.id === item.catalogSupplierId);
+    const product = supplier?.products.find(p => p.id === item.catalogProductId);
+    const nominal = product?.items?.find(i => i.id === item.catalogItemId);
+    const live = (nominal?.title || nominal?.code || "").trim();
+    return live || item.title;
+  }
+  const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
+  return (watch?.title || "").trim() || item.title;
+}
+
 function convertToRub(
   price: number,
   currency: string,
@@ -1370,7 +1389,7 @@ function GgselGroupCalculator({
           <div key={ggselGroupKey(mainItem)} className="border border-white/5 rounded-xl overflow-hidden bg-[#111112]">
             <div className="px-3 py-2 bg-black/20 text-[11px] text-gray-400 border-b border-white/5">
               Цена товара (база): <span className="font-mono font-bold text-white">{typeof mainPrice === "number" ? mainPrice.toFixed(2) : "—"} ₽</span>
-              {" "}— з номіналу «{mainItem.title}»
+              {" "}— з номіналу «{liveGgselItemTitle(mainItem, steamWatches, suppliers)}»
             </div>
             <div className="divide-y divide-white/5">
               {groupItems.map(item => {
@@ -1386,7 +1405,7 @@ function GgselGroupCalculator({
                       title={isMain ? "Прибрати позначку головного" : "Зробити головним"}
                     >
                       <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
-                      <span className="text-xs text-white truncate">{item.title}</span>
+                      <span className="text-xs text-white truncate">{liveGgselItemTitle(item, steamWatches, suppliers)}</span>
                     </button>
                     <div className="flex items-center gap-4 shrink-0">
                       <span className="text-xs font-mono text-gray-400">{typeof price === "number" ? `${price.toFixed(2)} ₽` : "—"}</span>
@@ -1655,7 +1674,7 @@ function GgselGroupRow({
     <div className={`flex items-center justify-between gap-2 px-3 py-2 ${item.isPaused ? "opacity-50" : ""} ${needsPriceIncrease && !item.isPaused ? "bg-amber-500/5" : ""}`}>
       <button onClick={() => onSetMainNominal(item.id)} className="flex items-center gap-1.5 min-w-0 cursor-pointer text-left">
         <Star className={`w-3 h-3 shrink-0 ${isMain ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} />
-        <span className="text-xs text-white truncate">{item.title}</span>
+        <span className="text-xs text-white truncate">{liveGgselItemTitle(item, steamWatches, suppliers)}</span>
         {priceTrendValue === "up" && <span className="text-amber-400 text-[10px] shrink-0">↑</span>}
         {priceTrendValue === "down" && <span className="text-emerald-400 text-[10px] shrink-0">↓</span>}
         {source.inStock === false && (

@@ -1679,6 +1679,36 @@ export default function App() {
       .map(s => ({ ...s, products: (s.products || []).filter(p => !p.deletedAt) }));
   }, [db.suppliers]);
 
+  // Автоприбирання «осиротілих» позицій калькулятора ggsel: якщо прив'язаного
+  // товару/номіналу вже немає серед активних Товарів (видалили або зник номінал
+  // при синхронізації) — позиція прибирається сама. Прапорці нижче не дають
+  // видалити щось під час завантаження чи прибрати геть усі позиції одразу.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const items = db.ggselItems || [];
+    if (items.length === 0) return;
+    // Якщо активних постачальників зовсім нема (напр. дані ще вантажаться) —
+    // не чіпаємо каталожні позиції, щоб не прибрати їх помилково.
+    if (visibleSuppliers.length === 0) return;
+
+    const isOrphan = (item: GgselWatchItem): boolean => {
+      if (item.sourceType !== "catalog") return false; // Steam-позиції не чіпаємо
+      const supplier = visibleSuppliers.find(s => s.id === item.catalogSupplierId);
+      if (!supplier) return true;
+      const product = (supplier.products || []).find(p => p.id === item.catalogProductId);
+      if (!product) return true;
+      const nominal = (product.items || []).find(i => i.id === item.catalogItemId);
+      return !nominal;
+    };
+
+    const kept = items.filter(i => !isOrphan(i));
+    if (kept.length === items.length) return; // нема що прибирати
+    if (kept.length === 0) return; // запобіжник: не прибираємо геть усе автоматично
+
+    saveStateToDisk({ ...db, ggselItems: kept });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.ggselItems, visibleSuppliers, isAuthenticated]);
+
   // Still resolving whether the stored session token is valid
   if (isCheckingSession) {
     return (
