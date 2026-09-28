@@ -18,6 +18,7 @@ const STATUS_STYLES: Record<OrderStatus, string> = {
 
 const emptyForm = () => ({
   api: "",
+  nominal: "",
   orderNumber: "",
   orderId: "",
   key: "",
@@ -48,6 +49,7 @@ export default function OrdersManager({
     setEditingId(o.id);
     setForm({
       api: o.api,
+      nominal: o.nominal,
       orderNumber: o.orderNumber,
       orderId: o.orderId,
       key: o.key,
@@ -62,6 +64,7 @@ export default function OrdersManager({
     e.preventDefault();
     const payload = {
       api: form.api.trim(),
+      nominal: form.nominal.trim(),
       orderNumber: form.orderNumber.trim(),
       orderId: form.orderId.trim(),
       key: form.key.trim(),
@@ -91,7 +94,7 @@ export default function OrdersManager({
       .filter(o => statusFilter === "Усі" ? true : o.status === statusFilter)
       .filter(o => {
         if (!q) return true;
-        return [o.api, o.orderNumber, o.orderId, o.key, o.customerNick, o.problem]
+        return [o.api, o.nominal, o.orderNumber, o.orderId, o.key, o.customerNick, o.problem]
           .some(v => (v || "").toLowerCase().includes(q));
       })
       .slice()
@@ -144,76 +147,95 @@ export default function OrdersManager({
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-[#111112] rounded-xl border border-white/5 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-[11px] uppercase tracking-wider text-gray-500 border-b border-white/5">
-                <th className="px-4 py-3 font-semibold">API</th>
-                <th className="px-4 py-3 font-semibold">№ замовлення</th>
-                <th className="px-4 py-3 font-semibold">ID</th>
-                <th className="px-4 py-3 font-semibold">Ключ</th>
-                <th className="px-4 py-3 font-semibold">Нік замовника</th>
-                <th className="px-4 py-3 font-semibold">Проблема</th>
-                <th className="px-4 py-3 font-semibold">Статус</th>
-                <th className="px-4 py-3 font-semibold">Додано</th>
-                <th className="px-4 py-3 font-semibold text-right">Дії</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-500">
-                    Замовлень за обраними фільтрами не знайдено.
-                  </td>
-                </tr>
-              ) : (
-                filtered.map(o => (
-                  <tr key={o.id} className="hover:bg-white/[0.01] transition-colors align-top">
-                    <td className="px-4 py-3 text-xs font-semibold text-white whitespace-nowrap">{o.api || "—"}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-300 whitespace-nowrap">{o.orderNumber || "—"}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-300 whitespace-nowrap">{o.orderId || "—"}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-400 max-w-[160px] truncate" title={o.key}>{o.key || "—"}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300 whitespace-nowrap">{o.customerNick || "—"}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300 max-w-[280px]">{o.problem || "—"}</td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={o.status}
-                        onChange={(e) => onUpdateOrder(o.id, { status: e.target.value as OrderStatus })}
-                        className={`text-[11px] font-bold px-2 py-1 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
-                      >
-                        {ORDER_STATUSES.map(s => (
-                          <option key={s} value={s} className="bg-[#161618] text-white">{s}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-4 py-3 text-[11px] text-gray-500 whitespace-nowrap">{formatDate(o.createdAt)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => openEdit(o)}
-                          className="p-1.5 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md cursor-pointer"
-                          title="Редагувати"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => onDeleteOrder(o.id)}
-                          className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md cursor-pointer"
-                          title="Видалити"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {/* Cards */}
+      {filtered.length === 0 ? (
+        <div className="bg-[#111112] rounded-xl border border-white/5 shadow-xs px-4 py-12 text-center text-sm text-gray-500">
+          Замовлень за обраними фільтрами не знайдено.
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filtered.map(o => (
+            <div key={o.id} className="bg-[#111112] rounded-xl border border-white/5 shadow-xs p-4 flex flex-col gap-3 hover:border-white/15 transition-all">
+              {/* Top: status + actions */}
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${STATUS_STYLES[o.status]}`}>
+                    {o.status}
+                  </span>
+                  {o.api && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border border-white/10 text-gray-300 bg-white/[0.02]">
+                      {o.api}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => openEdit(o)}
+                    className="p-1.5 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md cursor-pointer"
+                    title="Редагувати"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => onDeleteOrder(o.id)}
+                    className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md cursor-pointer"
+                    title="Видалити"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Nominal (title) */}
+              <div>
+                <p className="text-sm font-bold text-white leading-snug">{o.nominal || "Без назви номіналу"}</p>
+                {o.customerNick && (
+                  <p className="text-xs text-gray-400 mt-0.5">Замовник: <span className="text-gray-200 font-semibold">{o.customerNick}</span></p>
+                )}
+              </div>
+
+              {/* Key-value fields */}
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                <div className="min-w-0">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">№ замовлення</p>
+                  <p className="font-mono text-gray-200 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">ID</p>
+                  <p className="font-mono text-gray-200 truncate" title={o.orderId}>{o.orderId || "—"}</p>
+                </div>
+                <div className="col-span-2 min-w-0">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ключ</p>
+                  <p className="font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</p>
+                </div>
+              </div>
+
+              {/* Problem */}
+              {o.problem && (
+                <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Проблема</p>
+                  <p className="text-xs text-gray-300 whitespace-pre-wrap break-words">{o.problem}</p>
+                </div>
+              )}
+
+              {/* Footer: quick status change + date */}
+              <div className="flex items-center justify-between gap-2 pt-1 mt-auto border-t border-white/5">
+                <select
+                  value={o.status}
+                  onChange={(e) => onUpdateOrder(o.id, { status: e.target.value as OrderStatus })}
+                  className={`text-[11px] font-bold px-2 py-1 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
+                  title="Змінити статус"
+                >
+                  {ORDER_STATUSES.map(s => (
+                    <option key={s} value={s} className="bg-[#161618] text-white">{s}</option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-gray-500">{formatDate(o.createdAt)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Add / edit modal */}
       {isFormOpen && (
@@ -228,6 +250,15 @@ export default function OrdersManager({
             </div>
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Назва номіналу</label>
+                <input
+                  type="text" placeholder="напр. 60 + 6 Bonds"
+                  value={form.nominal}
+                  onChange={(e) => setForm({ ...form, nominal: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-white/[0.02] text-white"
+                />
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">API</label>

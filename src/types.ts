@@ -393,6 +393,7 @@ export const ORDER_STATUSES: OrderStatus[] = ["Прийнято", "В оброб
 export interface ProblemOrder {
   id: string;
   api: string;           // який API
+  nominal: string;       // назва номіналу (товар/позиція)
   orderNumber: string;   // номер замовлення
   orderId: string;       // ID замовлення
   key: string;           // ключ
