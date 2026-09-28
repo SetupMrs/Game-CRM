@@ -76,6 +76,14 @@ function resolveGgselPriceSource(
       inStock: nominal?.externalInStock
     };
   }
+  if (item.sourceType === "manual") {
+    return {
+      price: typeof item.manualPrice === "number" ? item.manualPrice : undefined,
+      currency: (item.manualCurrency || "USD").toUpperCase(),
+      label: "Ручний номінал",
+      inStock: true
+    };
+  }
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
   const entry = watch?.prices.find(p => p.countryCode === item.steamCountryCode);
   return {
@@ -101,6 +109,7 @@ function liveGgselItemTitle(
     const live = (nominal?.title || nominal?.code || "").trim();
     return live || item.title;
   }
+  if (item.sourceType === "manual") return item.title; // ручний номінал — назва власна
   const watch = steamWatches.find(w => w.packageId === item.steamPackageId);
   return (watch?.title || "").trim() || item.title;
 }
@@ -144,7 +153,9 @@ function computeItemSuggestedRub(
 }
 
 function ggselGroupKey(item: GgselWatchItem): string {
-  return item.sourceType === "catalog" ? `catalog:${item.catalogProductId}` : `steam:${item.steamPackageId}`;
+  if (item.sourceType === "catalog") return `catalog:${item.catalogProductId}`;
+  if (item.sourceType === "manual") return `manual:${item.manualGroupId || item.id}`;
+  return `steam:${item.steamPackageId}`;
 }
 
 // Для списку вибору країни: показуємо одразу в рублях, де можемо
@@ -189,6 +200,7 @@ export default function GgselManager({
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showAddManual, setShowAddManual] = useState(false);
   const [showPaused, setShowPaused] = useState(false);
   const [viewMode, setViewMode] = useState<"categories" | "calculator">("categories");
   const [rubRates, setRubRates] = useState<Record<string, number>>({});
@@ -418,10 +430,16 @@ export default function GgselManager({
                 <Trash2 className="w-3.5 h-3.5" /> Видалити категорію
               </button>
               <button
-                onClick={() => setShowAddItem(v => !v)}
+                onClick={() => { setShowAddManual(false); setShowAddItem(v => !v); }}
                 className="text-xs bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" /> Додати товар
+              </button>
+              <button
+                onClick={() => { setShowAddItem(false); setShowAddManual(v => !v); }}
+                className="text-xs bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" /> Ручний номінал
               </button>
             </div>
           </div>
@@ -439,7 +457,16 @@ export default function GgselManager({
             />
           )}
 
-          {categoryItems.length === 0 && !showAddItem ? (
+          {showAddManual && selectedCategoryId && (
+            <AddManualItemFlow
+              categoryId={selectedCategoryId}
+              rubRates={rubRates}
+              onAddItems={onAddItems}
+              onClose={() => setShowAddManual(false)}
+            />
+          )}
+
+          {categoryItems.length === 0 && !showAddItem && !showAddManual ? (
             <p className="text-xs text-gray-500 py-6 text-center">
               {showPaused ? "Немає призупинених товарів." : "Ще немає товарів у цій категорії."}
             </p>
@@ -581,6 +608,124 @@ function AddGgselItemPanel({
           onClose={onClose}
         />
       )}
+    </div>
+  );
+}
+
+// --- Manual add flow (власні номінали, згруповані в одну картку) ----------
+
+function AddManualItemFlow({
+  categoryId,
+  rubRates,
+  onAddItems,
+  onClose
+}: {
+  categoryId: string;
+  rubRates: Record<string, number>;
+  onAddItems: (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => void;
+  onClose: () => void;
+}) {
+  const currencyList = Array.from(new Set(["RUB", "USD", "UAH", ...Object.keys(rubRates).map(c => c.toUpperCase())]));
+  const [groupName, setGroupName] = useState("");
+  const [commission1, setCommission1] = useState("0");
+  const [commission2, setCommission2] = useState("0");
+  const [margin, setMargin] = useState("0");
+  const [rows, setRows] = useState<{ name: string; price: string; currency: string; rate: string }[]>([
+    { name: "", price: "", currency: "USD", rate: "" }
+  ]);
+
+  const setRow = (i: number, patch: Partial<{ name: string; price: string; currency: string; rate: string }>) =>
+    setRows(rs => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const addRow = () => setRows(rs => [...rs, { name: "", price: "", currency: "USD", rate: "" }]);
+  const removeRow = (i: number) => setRows(rs => (rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs));
+
+  const inputClass = "bg-black/30 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-600/50 w-full";
+
+  const handleSubmit = () => {
+    const name = groupName.trim();
+    const valid = rows.filter(r => r.name.trim() && r.price.trim() && !isNaN(parseFloat(r.price)));
+    if (!name || valid.length === 0) return;
+    const groupId = `mg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const c1 = parseFloat(commission1) || 0;
+    const c2 = parseFloat(commission2) || 0;
+    const mg = parseFloat(margin) || 0;
+    const items = valid.map((r, idx) => {
+      const rate = parseFloat(r.rate);
+      return {
+        categoryId,
+        title: r.name.trim(),
+        sourceType: "manual" as const,
+        manualPrice: parseFloat(r.price),
+        manualCurrency: r.currency,
+        manualGroupId: groupId,
+        groupTitleOverride: name,
+        exchangeRate: !isNaN(rate) && rate > 0 ? rate : undefined,
+        commission1Percent: c1,
+        commission2Percent: c2,
+        myMarginPercent: mg,
+        isMainNominal: idx === 0
+      };
+    });
+    onAddItems(items);
+    onClose();
+  };
+
+  const canSubmit = groupName.trim() && rows.some(r => r.name.trim() && r.price.trim() && !isNaN(parseFloat(r.price)));
+
+  return (
+    <div className="bg-[#111112] border border-white/5 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Pencil className="w-4 h-4 text-emerald-400" />
+        <span className="text-sm font-bold text-white">Ручний номінал</span>
+      </div>
+      <p className="text-[11px] text-gray-500">
+        Свої номінали з власною базовою ціною. Кілька номіналів з однією назвою картки згрупуються разом. Ціна ggsel рахується за тими самими комісіями й вашим %.
+      </p>
+
+      <div>
+        <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Назва картки (групи)</label>
+        <input value={groupName} onChange={e => setGroupName(e.target.value)} placeholder="напр. Мій набір" className={inputClass} />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Комісія 1, %</label>
+          <input type="number" value={commission1} onChange={e => setCommission1(e.target.value)} className={inputClass} />
+        </div>
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Комісія 2, %</label>
+          <input type="number" value={commission2} onChange={e => setCommission2(e.target.value)} className={inputClass} />
+        </div>
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Мій %</label>
+          <input type="number" value={margin} onChange={e => setMargin(e.target.value)} className={inputClass} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="block text-[10px] text-gray-500 uppercase tracking-wider">Номінали</label>
+        {rows.map((r, i) => (
+          <div key={i} className="grid grid-cols-12 gap-2 items-center">
+            <input value={r.name} onChange={e => setRow(i, { name: e.target.value })} placeholder="Назва номіналу" className={`${inputClass} col-span-4`} />
+            <input type="number" value={r.price} onChange={e => setRow(i, { price: e.target.value })} placeholder="Ціна" className={`${inputClass} col-span-3 font-mono`} />
+            <select value={r.currency} onChange={e => setRow(i, { currency: e.target.value })} className={`${inputClass} col-span-2 cursor-pointer`}>
+              {currencyList.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input type="number" value={r.rate} onChange={e => setRow(i, { rate: e.target.value })} placeholder="₽ за 1" title="Курс: скільки ₽ за 1 одиницю валюти (для не-RUB, якщо нема живого курсу)" className={`${inputClass} col-span-2 font-mono`} />
+            <button onClick={() => removeRow(i)} className="col-span-1 p-1 text-gray-500 hover:text-red-400 rounded cursor-pointer flex justify-center" title="Прибрати рядок">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+        <button onClick={addRow} className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 cursor-pointer">
+          <Plus className="w-3.5 h-3.5" /> Додати номінал
+        </button>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
+        <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 cursor-pointer">Скасувати</button>
+        <button onClick={handleSubmit} disabled={!canSubmit} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold cursor-pointer disabled:opacity-50">Додати</button>
+      </div>
     </div>
   );
 }
@@ -1480,12 +1625,13 @@ function GgselProductGroupCard({
   const [isExpanded, setIsExpanded] = useState(false);
   const first = items[0];
   const isCatalog = first.sourceType === "catalog";
+  const isManual = first.sourceType === "manual";
   const supplier = suppliers.find(s => s.id === first.catalogSupplierId);
   const product = supplier?.products.find(p => p.id === first.catalogProductId);
   const watch = steamWatches.find(w => w.packageId === first.steamPackageId);
   const overrideTitle = items.find(i => i.groupTitleOverride)?.groupTitleOverride;
-  const headerTitle = overrideTitle || (isCatalog ? product?.title || first.title : watch?.title || first.title);
-  const headerSubtitle = isCatalog ? supplier?.name : "Steam";
+  const headerTitle = overrideTitle || (isCatalog ? product?.title || first.title : isManual ? first.title : watch?.title || first.title);
+  const headerSubtitle = isCatalog ? supplier?.name : isManual ? "Ручний" : "Steam";
   const [titleInput, setTitleInput] = useState(headerTitle);
 
   const mainItem = items.find(i => i.isMainNominal) || items[0];
@@ -1657,6 +1803,7 @@ function GgselGroupRow({
   const [isEditing, setIsEditing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const isCatalog = item.sourceType === "catalog";
+  const isManual = item.sourceType === "manual";
   const handleSyncPrice = async () => {
     if (!item.steamPackageId || isSyncing) return;
     setIsSyncing(true);
@@ -1697,7 +1844,7 @@ function GgselGroupRow({
         <span className={`text-xs font-mono font-bold w-20 text-right ${isMain ? "text-gray-500" : typeof increase === "number" && increase < 0 ? "text-emerald-400" : "text-amber-400"}`}>
           {isMain ? "база" : typeof increase === "number" ? `${increase > 0 ? "+" : ""}${increase.toFixed(2)}` : "—"}
         </span>
-        {!isCatalog && (
+        {!isCatalog && !isManual && (
           <button
             onClick={handleSyncPrice}
             disabled={isSyncing}
@@ -1775,6 +1922,7 @@ function GgselItemCard({
   const [isFillingLetsKeys, setIsFillingLetsKeys] = useState(false);
   const [letsKeysMessage, setLetsKeysMessage] = useState<string | null>(null);
   const isCatalog = item.sourceType === "catalog";
+  const isManual = item.sourceType === "manual";
 
   const handleFillMissingWithLetsKeys = async () => {
     if (!item.steamPackageId || isFillingLetsKeys) return;
@@ -1856,6 +2004,10 @@ function GgselItemCard({
               <span className="text-[11px] text-gray-500 flex items-center gap-1">
                 <Package className="w-3 h-3" /> {source.label}
               </span>
+            ) : isManual ? (
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <Pencil className="w-3 h-3" /> {source.label}
+              </span>
             ) : (
               <>
                 <span className="text-[11px] text-gray-500">Ціна Steam з країни:</span>
@@ -1890,7 +2042,7 @@ function GgselItemCard({
           {letsKeysMessage && <p className="text-[10px] text-gray-500 mt-0.5">{letsKeysMessage}</p>}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {!isCatalog && (
+          {!isCatalog && !isManual && (
             <button
               onClick={handleSyncPrice}
               disabled={isSyncing}
@@ -1935,7 +2087,7 @@ function GgselItemCard({
 
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label className={labelClass}>{isCatalog ? "Ціна в каталозі" : "Ціна Steam"}</label>
+          <label className={labelClass}>{isCatalog ? "Ціна в каталозі" : isManual ? "Базова ціна" : "Ціна Steam"}</label>
           <div className="text-sm font-mono font-bold text-white">
             {typeof price === "number" ? `${price} ${currency}` : "—"}
           </div>

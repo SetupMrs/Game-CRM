@@ -245,7 +245,11 @@ export interface GgselWatchItem {
   id: string;
   categoryId: string;
   title: string;
-  sourceType?: "steam" | "catalog"; // відсутнє поле = "steam" (для товарів, доданих до цієї фічі)
+  sourceType?: "steam" | "catalog" | "manual"; // відсутнє поле = "steam" (для товарів, доданих до цієї фічі)
+  // Джерело "manual" — власний (ручний) номінал: користувач сам задає базову ціну.
+  manualPrice?: number;       // базова ціна
+  manualCurrency?: string;    // валюта базової ціни (RUB/USD/UAH...)
+  manualGroupId?: string;     // спільний id, щоб згрупувати кілька ручних номіналів в одну картку
   // Джерело "steam"
   steamPackageId?: string; // посилання на SteamWatchItem.packageId
   steamCountryCode?: string; // яку саме "країну" ціни Steam використовувати (SteamPriceEntry.countryCode)
