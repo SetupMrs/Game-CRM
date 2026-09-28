@@ -156,12 +156,19 @@ export default function OrdersManager({
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(o => (
             <div key={o.id} className="bg-[#111112] rounded-xl border border-white/5 shadow-xs p-4 flex flex-col gap-3 hover:border-white/15 transition-all">
-              {/* Top: status + actions */}
+              {/* Top: single (editable) status + API + actions */}
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${STATUS_STYLES[o.status]}`}>
-                    {o.status}
-                  </span>
+                  <select
+                    value={o.status}
+                    onChange={(e) => onUpdateOrder(o.id, { status: e.target.value as OrderStatus })}
+                    className={`text-[11px] font-bold px-2 py-1 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
+                    title="Змінити статус"
+                  >
+                    {ORDER_STATUSES.map(s => (
+                      <option key={s} value={s} className="bg-[#161618] text-white">{s}</option>
+                    ))}
+                  </select>
                   {o.api && (
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border border-white/10 text-gray-300 bg-white/[0.02]">
                       {o.api}
@@ -186,31 +193,33 @@ export default function OrdersManager({
                 </div>
               </div>
 
-              {/* Nominal (title) */}
-              <div>
-                <p className="text-sm font-bold text-white leading-snug">{o.nominal || "Без назви номіналу"}</p>
-                {o.customerNick && (
-                  <p className="text-xs text-gray-400 mt-0.5">Замовник: <span className="text-gray-200 font-semibold">{o.customerNick}</span></p>
-                )}
-              </div>
-
-              {/* Key-value fields */}
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+              {/* Fields: замовник → номінал → номер → ІД → ключ */}
+              <div className="space-y-2">
                 <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">№ замовлення</p>
-                  <p className="font-mono text-gray-200 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Замовник</p>
+                  <p className="text-sm font-bold text-white truncate" title={o.customerNick}>{o.customerNick || "—"}</p>
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">ID</p>
-                  <p className="font-mono text-gray-200 truncate" title={o.orderId}>{o.orderId || "—"}</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Номінал</p>
+                  <p className="text-sm font-semibold text-gray-200 leading-snug break-words">{o.nominal || "—"}</p>
                 </div>
-                <div className="col-span-2 min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ключ</p>
-                  <p className="font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</p>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 pt-1">
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Номер</p>
+                    <p className="text-xs font-mono text-gray-300 truncate" title={o.orderNumber}>{o.orderNumber || "—"}</p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">ІД</p>
+                    <p className="text-xs font-mono text-gray-300 truncate" title={o.orderId}>{o.orderId || "—"}</p>
+                  </div>
+                  <div className="col-span-2 min-w-0">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ключ</p>
+                    <p className="text-xs font-mono text-gray-400 truncate" title={o.key}>{o.key || "—"}</p>
+                  </div>
                 </div>
               </div>
 
-              {/* Problem */}
+              {/* Проблема */}
               {o.problem && (
                 <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Проблема</p>
@@ -218,18 +227,8 @@ export default function OrdersManager({
                 </div>
               )}
 
-              {/* Footer: quick status change + date */}
-              <div className="flex items-center justify-between gap-2 pt-1 mt-auto border-t border-white/5">
-                <select
-                  value={o.status}
-                  onChange={(e) => onUpdateOrder(o.id, { status: e.target.value as OrderStatus })}
-                  className={`text-[11px] font-bold px-2 py-1 rounded-md border bg-transparent cursor-pointer focus:outline-hidden ${STATUS_STYLES[o.status]}`}
-                  title="Змінити статус"
-                >
-                  {ORDER_STATUSES.map(s => (
-                    <option key={s} value={s} className="bg-[#161618] text-white">{s}</option>
-                  ))}
-                </select>
+              {/* Footer: date only */}
+              <div className="flex items-center justify-end gap-2 pt-1 mt-auto border-t border-white/5">
                 <span className="text-[11px] text-gray-500">{formatDate(o.createdAt)}</span>
               </div>
             </div>
