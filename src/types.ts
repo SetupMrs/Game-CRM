@@ -387,8 +387,8 @@ export interface TransactionTemplate {
 }
 
 // Проблемне замовлення на сторінці «Замовлення».
-export type OrderStatus = "Прийнято" | "В обробці" | "Завершено";
-export const ORDER_STATUSES: OrderStatus[] = ["Прийнято", "В обробці", "Завершено"];
+export type OrderStatus = "Не розпочато" | "Прийнято" | "В обробці" | "Завершено";
+export const ORDER_STATUSES: OrderStatus[] = ["Не розпочато", "Прийнято", "В обробці", "Завершено"];
 
 export interface ProblemOrder {
   id: string;

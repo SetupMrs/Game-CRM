@@ -11,6 +11,7 @@ interface OrdersManagerProps {
 }
 
 const STATUS_STYLES: Record<OrderStatus, string> = {
+  "Не розпочато": "bg-gray-500/10 text-gray-300 border-gray-500/30",
   "Прийнято": "bg-sky-500/10 text-sky-300 border-sky-500/30",
   "В обробці": "bg-amber-500/10 text-amber-300 border-amber-500/30",
   "Завершено": "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
@@ -24,7 +25,7 @@ const emptyForm = () => ({
   key: "",
   customerNick: "",
   problem: "",
-  status: "Прийнято" as OrderStatus
+  status: "Не розпочато" as OrderStatus
 });
 
 export default function OrdersManager({
@@ -83,7 +84,8 @@ export default function OrdersManager({
   };
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { "Усі": orders.length, "Прийнято": 0, "В обробці": 0, "Завершено": 0 };
+    const c: Record<string, number> = { "Усі": orders.length };
+    ORDER_STATUSES.forEach(s => { c[s] = 0; });
     orders.forEach(o => { c[o.status] = (c[o.status] || 0) + 1; });
     return c;
   }, [orders]);
