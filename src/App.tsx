@@ -502,7 +502,16 @@ export default function App() {
   useEffect(() => {
     if (isAuthenticated) {
       loadDatabase();
-      listBasicUsers().then(setAssignableUsers);
+      // Завантажуємо список користувачів з кількома спробами: якщо запит один
+      // раз не вдасться, список лишиться порожнім і всі рахунки покажуться як
+      // «невідомі». Тому пробуємо ще кілька разів із паузою.
+      (async () => {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const list = await listBasicUsers();
+          if (list.length > 0) { setAssignableUsers(list); return; }
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        }
+      })();
 
       // Prefetch every tab's code chunk in the background once we're logged
       // in, so switching tabs later feels instant instead of showing
@@ -1726,6 +1735,17 @@ export default function App() {
       .map(s => ({ ...s, products: (s.products || []).filter(p => !p.deletedAt) }));
   }, [db.suppliers]);
 
+  // Список користувачів для Фінансів: завжди містить поточного користувача,
+  // навіть якщо загальний список ще не підвантажився — щоб його власні операції
+  // та рахунки ніколи не показувались як «невідомі».
+  const financeUsers = useMemo(() => {
+    const list = [...assignableUsers];
+    if (appUser && !list.some(u => u.id === appUser.id)) {
+      list.unshift({ id: appUser.id, username: appUser.username });
+    }
+    return list;
+  }, [assignableUsers, appUser]);
+
   // Автоприбирання «осиротілих» позицій калькулятора ggsel: якщо прив'язаного
   // товару/номіналу вже немає серед активних Товарів (видалили або зник номінал
   // при синхронізації) — позиція прибирається сама. Прапорці нижче не дають
@@ -2180,7 +2200,7 @@ export default function App() {
                     budgets={db.budgets || []}
                     tasks={visibleTasks}
                     suppliers={visibleSuppliers}
-                    users={assignableUsers}
+                    users={financeUsers}
                     currentUserId={appUser?.id || null}
                     accounts={db.financeAccounts || []}
                     onAddAccount={handleAddAccount}
