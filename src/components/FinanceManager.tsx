@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { 
   Wallet, 
   ArrowUpRight, 
@@ -166,6 +166,20 @@ export default function FinanceManager({
     return { name: "Невідомий рахунок", owner: "" };
   };
 
+  // Власник рахунку (за ключем) та операції — для прав на редагування.
+  const accountOwnerId = (key: string): string => {
+    const d = descriptorByKey[key];
+    if (d) return d.ownerUserId;
+    if (key.startsWith(MAIN_PREFIX)) {
+      const uid = key.slice(MAIN_PREFIX.length);
+      return uid === UNASSIGNED ? "" : uid;
+    }
+    return "";
+  };
+  const txOwnerId = (tx: Transaction): string => accountOwnerId(resolveAccountKey(tx));
+  // Чи може поточний користувач редагувати цей рахунок/операцію (лише свої).
+  const canManageOwner = (ownerUserId: string): boolean => !!currentUserId && ownerUserId === currentUserId;
+
   // Короткий підпис рахунку одним рядком (напр. «Alex · Основний»).
   const accountFullLabel = (key: string): string => {
     const { name, owner } = accountDisplay(key);
@@ -174,14 +188,10 @@ export default function FinanceManager({
 
   // Порядок рахунків для вибору у формі: спершу мої (основний, потім додаткові),
   // далі інших користувачів.
+  // Лише власні рахунки — на чужі операції додавати не можна (тільки перегляд).
   const accountOptions = useMemo(() => {
-    const arr = [...accountDescriptors];
+    const arr = accountDescriptors.filter(d => d.ownerUserId === currentUserId);
     arr.sort((a, b) => {
-      const aMine = a.ownerUserId === currentUserId ? 0 : 1;
-      const bMine = b.ownerUserId === currentUserId ? 0 : 1;
-      if (aMine !== bMine) return aMine - bMine;
-      const byOwner = ownerName(a.ownerUserId).localeCompare(ownerName(b.ownerUserId));
-      if (byOwner !== 0) return byOwner;
       if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
@@ -246,6 +256,18 @@ export default function FinanceManager({
 
     return rows;
   }, [transactions, accountDescriptors, descriptorByKey, accountsById, baseCurrency]);
+
+  // Завжди відкрито конкретний рахунок (без «загального»): якщо обраного немає —
+  // показуємо власний «Основний», інакше перший доступний рахунок.
+  useEffect(() => {
+    if (accountBalances.length === 0) return;
+    const stillValid = accountBalances.some(r => r.key === accountFilter);
+    if (stillValid) return;
+    const mine = accountBalances.find(r => r.key === mainKey(currentUserId || undefined));
+    const fallback = mine?.key || accountBalances[0]?.key;
+    if (fallback) setAccountFilter(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountBalances, currentUserId]);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -636,7 +658,7 @@ export default function FinanceManager({
     }
 
     // Account filter (за конкретним рахунком — кожен переглядається окремо)
-    if (accountFilter !== "All") {
+    if (accountFilter && accountFilter !== "All") {
       result = result.filter(tx => resolveAccountKey(tx) === accountFilter);
     }
 
@@ -1102,14 +1124,6 @@ export default function FinanceManager({
               Рахунки
             </h4>
             <div className="flex items-center gap-3">
-              {accountFilter !== "All" && (
-                <button
-                  onClick={() => setAccountFilter("All")}
-                  className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
-                >
-                  ✕ Показати всі операції
-                </button>
-              )}
               {onAddAccount && currentUserId && (
                 <button
                   onClick={() => { setNewAccountName(""); setIsAddAccountOpen(true); }}
@@ -1126,7 +1140,7 @@ export default function FinanceManager({
             {accountBalances.map(acc => {
               const selected = accountFilter === acc.key;
               const isUnassigned = acc.key === mainKey(undefined);
-              const canManage = !!acc.ownerUserId; // основний користувача або додатковий
+              const canManage = canManageOwner(acc.ownerUserId); // лише власні рахунки
               const canDelete = !acc.isMain && acc.ownerUserId === currentUserId && Object.keys(acc.currencies).length === 0;
               const currencyList = Object.entries(acc.currencies).sort((a, b) =>
                 a[0] === baseCurrency ? -1 : b[0] === baseCurrency ? 1 : a[0].localeCompare(b[0])
@@ -1141,7 +1155,7 @@ export default function FinanceManager({
                   }`}
                 >
                   <div
-                    onClick={() => setAccountFilter(selected ? "All" : acc.key)}
+                    onClick={() => setAccountFilter(acc.key)}
                     className="text-left cursor-pointer"
                     title="Показати операції цього рахунку"
                   >
@@ -1365,6 +1379,7 @@ export default function FinanceManager({
                     const isIncome = tx.type === "Income";
                     const conv = tx.conversion;
                     const adjust = tx.balanceAdjustment;
+                    const canEditTx = canManageOwner(txOwnerId(tx)); // лише свої операції
                     return (
                       <tr key={tx.id} className="hover:bg-white/[0.01] transition-colors">
                         <td className="px-5 py-3.5 font-mono text-[11px] text-gray-400">
@@ -1451,22 +1466,26 @@ export default function FinanceManager({
                           </td>
                         )}
                         <td className="px-5 py-3.5 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => conv ? handleStartEditConversion(tx) : handleStartEdit(tx)}
-                              className="p-1 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md transition-colors cursor-pointer"
-                              title="Редагувати запис"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => onDeleteTransaction(tx.id)}
-                              className="p-1 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md transition-colors cursor-pointer"
-                              title="Видалити запис"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {canEditTx ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => conv ? handleStartEditConversion(tx) : handleStartEdit(tx)}
+                                className="p-1 text-gray-500 hover:text-emerald-400 hover:bg-white/5 rounded-md transition-colors cursor-pointer"
+                                title="Редагувати запис"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => onDeleteTransaction(tx.id)}
+                                className="p-1 text-gray-500 hover:text-red-400 hover:bg-white/5 rounded-md transition-colors cursor-pointer"
+                                title="Видалити запис"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-600" title="Чужий рахунок — лише перегляд">перегляд</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1766,16 +1785,9 @@ export default function FinanceManager({
                   <Users className="w-3.5 h-3.5 text-emerald-400" />
                   Рахунок
                 </label>
-                <select
-                  value={convForm.userId}
-                  onChange={(e) => setConvForm({ ...convForm, userId: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg focus:outline-hidden focus:border-emerald-500 bg-[#161618] text-white cursor-pointer"
-                >
-                  <option value="">Без рахунку</option>
-                  {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.username}</option>
-                  ))}
-                </select>
+                <div className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg bg-[#161618] text-gray-300">
+                  {(ownerName(currentUserId || "") || "Мій рахунок")} · Основний
+                </div>
               </div>
 
               {/* Give */}
