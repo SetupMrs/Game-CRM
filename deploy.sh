@@ -3,9 +3,16 @@
 # Забирає останній код з git, збирає в тимчасову папку, і лише після
 # повністю успішної збірки підміняє робочу dist/ — якщо з'єднання
 # обірветься чи збірка впаде посередині, працюючий сервер це не зачепить.
+#
+# Імʼя PM2-процесу береться з .env (PM2_NAME), за замовчуванням "game-crm".
+# Завдяки цьому той самий скрипт обслуговує кілька окремих копій (компаній).
 set -e
 
-echo "==> Забираю останні зміни з git..."
+# Імʼя процесу цієї копії (з .env або типове).
+APP="$(grep -E '^PM2_NAME=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' ' )"
+APP="${APP:-game-crm}"
+
+echo "==> [$APP] Забираю останні зміни з git..."
 git pull
 
 echo "==> Встановлюю залежності..."
@@ -23,9 +30,9 @@ if [ -d dist ]; then
 fi
 mv dist_new dist
 
-echo "==> Перезапускаю сервер через PM2..."
-if pm2 describe game-crm > /dev/null 2>&1; then
-  pm2 restart game-crm
+echo "==> Перезапускаю сервер через PM2 (процес: $APP)..."
+if pm2 describe "$APP" > /dev/null 2>&1; then
+  pm2 restart "$APP"
 else
   pm2 start ecosystem.config.cjs
 fi
@@ -34,4 +41,4 @@ rm -rf dist_old
 
 echo ""
 echo "==> Готово! Поточний статус:"
-pm2 status game-crm
+pm2 status "$APP"

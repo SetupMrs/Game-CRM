@@ -12,7 +12,8 @@
 
 set -u
 
-REPO_DIR="$HOME/Game-CRM"
+# Папка копії = там, де лежить цей скрипт (працює для будь-якої копії компанії).
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRANCH="main"
 LOG="$REPO_DIR/auto-deploy.log"
 LOCK="$REPO_DIR/.auto-deploy.lock"
