@@ -5,6 +5,11 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    define: {
+      // Дата збірки — проставляється автоматично при кожному деплої.
+      // Видно у футері: зручно бачити, коли оновлювалась робоча версія.
+      __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

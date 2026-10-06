@@ -2290,7 +2290,7 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-[#0D0D0E] border-t border-white/5 py-4 mt-10 flex-shrink-0 text-gray-500">
         <div className="w-full px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-3 text-xs">
-          <p>© 2026 Game CRM. Дані зберігаються на сервері (SQLite).</p>
+          <p>© 2026 Game CRM. Дані зберігаються на сервері (SQLite). <span className="text-gray-600">· Оновлено: {(() => { try { return new Date(__BUILD_DATE__).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } })()}</span></p>
           <div className="flex gap-4">
             <span className="font-semibold text-emerald-400">Підключено до сервера</span>
           </div>
