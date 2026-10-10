@@ -13,6 +13,32 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 
+// Не розкриваємо, що це Express (менше інформації потенційному зловмиснику).
+app.disable("x-powered-by");
+
+// Якщо застосунок стоїть за HTTPS-проксі (nginx/Caddy), у .env вкажіть
+// TRUST_PROXY=1 — тоді req.ip бачить реального клієнта (важливо для захисту
+// від підбору пароля), а req.secure коректно показує, що зʼєднання по HTTPS.
+// За замовчуванням вимкнено, щоб при прямому доступі не можна було підробити IP.
+if (process.env.TRUST_PROXY === "1") {
+  app.set("trust proxy", 1);
+}
+
+// Базові захисні HTTP-заголовки для всіх відповідей.
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");           // не дає браузеру «вгадувати» тип файлу
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");               // захист від clickjacking (вбудовування в чужий сайт)
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-XSS-Protection", "0");                       // сучасна рекомендація — вимкнути застарілий фільтр
+  // HSTS має сенс лише коли вже є HTTPS: наказує браузеру завжди ходити по HTTPS.
+  const isHttps = (req as any).secure || req.headers["x-forwarded-proto"] === "https";
+  if (isHttps) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
+
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
@@ -49,7 +75,7 @@ sqlite.exec(`
 `);
 
 const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 10;
 
 // Passwords are never stored or logged in plain text. scrypt is a built-in
 // Node.js primitive (no extra dependency) designed specifically to be slow
