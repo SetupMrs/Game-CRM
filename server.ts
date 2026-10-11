@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -15,6 +16,10 @@ const HOST = process.env.HOST || "0.0.0.0";
 
 // Не розкриваємо, що це Express (менше інформації потенційному зловмиснику).
 app.disable("x-powered-by");
+
+// Стиснення (gzip) усіх відповідей — суттєво пришвидшує передачу великого
+// обсягу даних (повне завантаження бази на сторінку), особливо текстових полів.
+app.use(compression());
 
 // Якщо застосунок стоїть за HTTPS-проксі (nginx/Caddy), у .env вкажіть
 // TRUST_PROXY=1 — тоді req.ip бачить реального клієнта (важливо для захисту
