@@ -1068,11 +1068,7 @@ app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req,
 // straight into SQLite — the same merge rules the manual sync button uses
 // (match by externalVariationId, record price history when price changes).
 // This runs entirely server-side on a timer, no browser tab needs to be open.
-// За замовчуванням: якщо ключ LetsKeys налаштовано — синхронізуємо раз на добу
-// (24 год); без ключа — вимкнено (0), щоб нові копії без ключа не давали помилок.
-// Явне значення LETSKEYS_AUTO_SYNC_HOURS у .env завжди має пріоритет.
-const LETSKEYS_AUTO_SYNC_DEFAULT = process.env.LETSKEYS_API_KEY ? 24 : 0;
-const LETSKEYS_AUTO_SYNC_HOURS = Number(process.env.LETSKEYS_AUTO_SYNC_HOURS) || LETSKEYS_AUTO_SYNC_DEFAULT;
+// Запускається щодня у заданий час — див. scheduleDailyPriceSync нижче.
 
 async function fetchLetsKeysVariationsRaw(productId: string, region: string, apiKey: string): Promise<any[] | null> {
   try {
@@ -1264,15 +1260,65 @@ app.post("/api/suppliers/letskeys/auto-sync/run-now", requireAuth, (req, res) =>
   res.json({ status: "success", message: "Синхронізацію запущено у фоні." });
 });
 
-if (LETSKEYS_AUTO_SYNC_HOURS > 0) {
-  const intervalMs = LETSKEYS_AUTO_SYNC_HOURS * 60 * 60 * 1000;
-  // First run shortly after startup (not instantly, to let everything settle),
-  // then repeat on the configured interval.
-  setTimeout(() => { runLetsKeysAutoSync().catch(err => console.error("[AutoSync] failed:", err)); }, 2 * 60 * 1000);
-  setInterval(() => { runLetsKeysAutoSync().catch(err => console.error("[AutoSync] failed:", err)); }, intervalMs);
-  console.log(`[AutoSync] Автоматична синхронізація цін LetsKeys увімкнена — кожні ${LETSKEYS_AUTO_SYNC_HOURS} год.`);
+// ---------------------------------------------------------------------------
+// Щоденний розклад оновлення цін: лише в заданий час (за замовчуванням 06:00
+// за Києвом). При перезапуску сервера/автооновленні синхронізація НЕ
+// запускається. Дата останнього запуску зберігається в базі (settings), тож
+// перезапуск не дублює і не пропускає щоденний запуск.
+//   PRICE_SYNC_TIME=06:00         — час запуску (ГГ:ХХ)
+//   PRICE_SYNC_TZ=Europe/Kyiv     — часовий пояс
+// ---------------------------------------------------------------------------
+const PRICE_SYNC_TIME = (process.env.PRICE_SYNC_TIME || "06:00").trim();
+const PRICE_SYNC_TZ = (process.env.PRICE_SYNC_TZ || "Europe/Kyiv").trim();
+const DAILY_SYNC_WINDOW_MIN = 15; // запас на випадок, якщо перевірка пропустить рівно ту хвилину
+
+function parseHHMM(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+const PRICE_SYNC_MINUTES = parseHHMM(PRICE_SYNC_TIME) ?? 6 * 60;
+
+function zonedNow(): { date: string; minutes: number } {
+  let tz = PRICE_SYNC_TZ;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+    }).formatToParts(new Date());
+  } catch {
+    tz = "Europe/Kiev";
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+    }).formatToParts(new Date());
+  }
+  const get = (t: string) => parts.find(p => p.type === t)?.value || "00";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, minutes: Number(get("hour")) * 60 + Number(get("minute")) };
+}
+
+function scheduleDailyPriceSync(name: string, settingsKey: string, run: () => Promise<void>) {
+  const tick = () => {
+    const { date, minutes } = zonedNow();
+    if (minutes < PRICE_SYNC_MINUTES || minutes >= PRICE_SYNC_MINUTES + DAILY_SYNC_WINDOW_MIN) return;
+    const last = sqlite.prepare("SELECT value FROM settings WHERE key = ?").get(settingsKey) as { value: string } | undefined;
+    if (last?.value === date) return; // сьогодні вже запускали
+    sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(settingsKey, date);
+    console.log(`[${name}] Щоденний запуск за розкладом (${PRICE_SYNC_TIME}, ${PRICE_SYNC_TZ}).`);
+    run().catch(err => console.error(`[${name}] failed:`, err));
+  };
+  setInterval(tick, 60 * 1000);
+}
+
+// LetsKeys: увімкнено, якщо задано ключ API; LETSKEYS_AUTO_SYNC_HOURS=0 вимикає.
+const LETSKEYS_DAILY_ENABLED = !!process.env.LETSKEYS_API_KEY && process.env.LETSKEYS_AUTO_SYNC_HOURS?.trim() !== "0";
+if (LETSKEYS_DAILY_ENABLED) {
+  scheduleDailyPriceSync("AutoSync", "lastLetsKeysDailySync", runLetsKeysAutoSync);
+  console.log(`[AutoSync] Оновлення цін LetsKeys — щодня о ${PRICE_SYNC_TIME} (${PRICE_SYNC_TZ}). При перезапуску не запускається.`);
 } else {
-  console.log("[AutoSync] Автоматична синхронізація вимкнена (LETSKEYS_AUTO_SYNC_HOURS не задано або 0).");
+  console.log("[AutoSync] Автоматичне оновлення цін LetsKeys вимкнене (немає ключа або LETSKEYS_AUTO_SYNC_HOURS=0).");
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,14 +1685,13 @@ app.post("/api/steam-watch/sync-one", requireAuth, async (req, res) => {
   }
 });
 
-const STEAM_WATCH_AUTO_SYNC_HOURS = Number(process.env.STEAM_WATCH_AUTO_SYNC_HOURS) || 24;
-if (STEAM_WATCH_AUTO_SYNC_HOURS > 0) {
-  const steamIntervalMs = STEAM_WATCH_AUTO_SYNC_HOURS * 60 * 60 * 1000;
-  setTimeout(() => { runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err)); }, 3 * 60 * 1000);
-  setInterval(() => { runSteamWatchAutoSync().catch(err => console.error("[SteamWatch] failed:", err)); }, steamIntervalMs);
-  console.log(`[SteamWatch] Автоматична синхронізація цін Steam увімкнена — кожні ${STEAM_WATCH_AUTO_SYNC_HOURS} год.`);
+// Steam: щодня в той самий час, що й LetsKeys; STEAM_WATCH_AUTO_SYNC_HOURS=0 вимикає.
+const STEAM_DAILY_ENABLED = process.env.STEAM_WATCH_AUTO_SYNC_HOURS?.trim() !== "0";
+if (STEAM_DAILY_ENABLED) {
+  scheduleDailyPriceSync("SteamWatch", "lastSteamDailySync", runSteamWatchAutoSync);
+  console.log(`[SteamWatch] Оновлення цін Steam — щодня о ${PRICE_SYNC_TIME} (${PRICE_SYNC_TZ}). При перезапуску не запускається.`);
 } else {
-  console.log("[SteamWatch] Автоматична синхронізація Steam вимкнена (STEAM_WATCH_AUTO_SYNC_HOURS=0).");
+  console.log("[SteamWatch] Автоматичне оновлення цін Steam вимкнене (STEAM_WATCH_AUTO_SYNC_HOURS=0).");
 }
 
 // ---------------------------------------------------------------------------
