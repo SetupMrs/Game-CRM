@@ -849,7 +849,11 @@ app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req,
 // straight into SQLite — the same merge rules the manual sync button uses
 // (match by externalVariationId, record price history when price changes).
 // This runs entirely server-side on a timer, no browser tab needs to be open.
-const LETSKEYS_AUTO_SYNC_HOURS = Number(process.env.LETSKEYS_AUTO_SYNC_HOURS) || 0;
+// За замовчуванням: якщо ключ LetsKeys налаштовано — синхронізуємо раз на добу
+// (24 год); без ключа — вимкнено (0), щоб нові копії без ключа не давали помилок.
+// Явне значення LETSKEYS_AUTO_SYNC_HOURS у .env завжди має пріоритет.
+const LETSKEYS_AUTO_SYNC_DEFAULT = process.env.LETSKEYS_API_KEY ? 24 : 0;
+const LETSKEYS_AUTO_SYNC_HOURS = Number(process.env.LETSKEYS_AUTO_SYNC_HOURS) || LETSKEYS_AUTO_SYNC_DEFAULT;
 
 async function fetchLetsKeysVariationsRaw(productId: string, region: string, apiKey: string): Promise<any[] | null> {
   try {
