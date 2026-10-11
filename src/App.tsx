@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, Suspense, lazy } from "react";
+import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from "react";
+import { buildDbOps } from "./dbOps";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   CheckSquare, 
@@ -180,6 +181,26 @@ function withRecurrenceSpawn(tasksList: Task[], prevStatus: TaskStatus | undefin
 export default function App() {
   // Global Database State
   const [db, setDb] = useState<DatabaseState>(EMPTY_DB);
+  // --- Надійне збереження (див. src/dbOps.ts і POST /api/db/ops) -------------
+  // dbRef — завжди найсвіжіший стан (для асинхронних обробників, які інакше
+  // бачили б застарілий `db` після очікування відповіді сервера).
+  const dbRef = useRef<DatabaseState>(EMPTY_DB);
+  // Останній стан, який сервер точно має (підтверджене збереження або завантаження).
+  const lastAckedRef = useRef<DatabaseState | null>(null);
+  // Найновіший стан, який ще треба відправити (черга з одного елемента — береться найсвіжіший).
+  const pendingRef = useRef<DatabaseState | null>(null);
+  const flushPromiseRef = useRef<Promise<boolean> | null>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const retryDelayRef = useRef(2000);
+  const hadSaveErrorRef = useRef(false);
+  // Покоління синхронізації: при повному перезавантаженні бази збільшується, і
+  // відповіді на запити, відправлені до нього, ігноруються.
+  const syncGenRef = useRef(0);
+
+  const commitDb = (next: DatabaseState) => {
+    dbRef.current = next;
+    setDb(next);
+  };
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "tasks" | "finance" | "suppliers" | "prices" | "ggsel" | "orders">("dashboard");
   const [isLoading, setIsLoading] = useState(true);
@@ -457,19 +478,26 @@ export default function App() {
       if (!res.ok) throw new Error("Помилка при читанні бази даних.");
       const data = await res.json();
 
-      let finalData: DatabaseState = normalizeDb(data);
-      const { db: purgedData, purgedCount } = purgeExpiredTrash(finalData);
-      if (purgedCount > 0) {
-        finalData = purgedData;
-        // Persist the purge silently in the background; don't block the UI on it.
-        apiFetch("/api/db", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(purgedData)
-        }).catch(() => { /* best-effort */ });
-      }
+      const serverData: DatabaseState = normalizeDb(data);
 
-      setDb(finalData);
+      // Нове «покоління»: усе, що стояло в черзі до перезавантаження, відкидаємо —
+      // інакше застарілий локальний стан міг би видалити нові записи інших людей.
+      syncGenRef.current += 1;
+      pendingRef.current = null;
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      hadSaveErrorRef.current = false;
+      lastAckedRef.current = serverData;
+
+      const { db: purgedData, purgedCount } = purgeExpiredTrash(serverData);
+      if (purgedCount > 0) {
+        // Остаточно прибираємо прострочене з кошика — у фоні, лише видаленням цих записів.
+        saveStateToDisk(purgedData);
+      } else {
+        commitDb(serverData);
+      }
     } catch (error: any) {
       console.error("Server database load failed:", error);
       setServerError("Не вдалося з'єднатися із сервером. Перевірте, чи запущений сервер, та спробуйте ще раз.");
@@ -536,31 +564,117 @@ export default function App() {
     setAppUser(null);
   };
 
-  // Universal State Update & Disk Save (server is the single source of truth)
-  const saveStateToDisk = async (updatedDb: DatabaseState): Promise<boolean> => {
-    setDb(updatedDb);
-
-    try {
-      const res = await apiFetch("/api/db", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedDb)
-      });
-      if (!res.ok) {
-        let serverMessage = "";
-        try { serverMessage = (await res.json())?.message || ""; } catch { /* ignore */ }
-        throw new Error(serverMessage || "Помилка збереження змін на диск.");
+  // Universal State Update & Disk Save (server is the single source of truth).
+  // Шлемо на сервер лише змінені записи, по черзі (ніколи два запити одночасно —
+  // тож старіший не може перезаписати новіший), з повтором при збої мережі.
+  const sendPending = async (): Promise<boolean> => {
+    let allOk = true;
+    while (pendingRef.current) {
+      const target = pendingRef.current;
+      pendingRef.current = null;
+      const gen = syncGenRef.current;
+      const payload = buildDbOps(lastAckedRef.current, target);
+      if (!payload) {
+        lastAckedRef.current = target;
+        continue;
       }
-      return true;
-    } catch (error: any) {
-      console.error("Server persist failed:", error);
-      setBackupFeedback({
-        type: "error",
-        message: error?.message || "Не вдалося зберегти зміни на сервері. Перевірте з'єднання."
-      });
-      return false;
+      try {
+        let res = await apiFetch("/api/db/ops", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 409) {
+          // Сервер заблокував масове видалення — питаємо, чи це справді навмисно.
+          let message = "";
+          try { message = (await res.json())?.message || ""; } catch { /* ignore */ }
+          const confirmed = window.confirm(
+            `${message || "Ця дія видаляє всі записи в розділі."}\n\nВидалити все одно?`
+          );
+          if (!confirmed) {
+            setBackupFeedback({ type: "error", message: "Видалення скасовано — дані на сервері не змінено." });
+            if (gen === syncGenRef.current) loadDatabase();
+            return false;
+          }
+          res = await apiFetch("/api/db/ops?force=true", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        }
+        if (!res.ok) {
+          let serverMessage = "";
+          try { serverMessage = (await res.json())?.message || ""; } catch { /* ignore */ }
+          throw new Error(serverMessage || "Помилка збереження змін на сервері.");
+        }
+        if (gen !== syncGenRef.current) continue; // базу тим часом перезавантажили — відповідь застаріла
+        lastAckedRef.current = target;
+        retryDelayRef.current = 2000;
+        if (hadSaveErrorRef.current) {
+          hadSaveErrorRef.current = false;
+          setBackupFeedback({ type: "success", message: "Зʼєднання відновлено — усі зміни збережено." });
+        }
+      } catch (error: any) {
+        allOk = false;
+        console.error("Server persist failed:", error);
+        if (gen !== syncGenRef.current) continue; // застарілий запит — просто відкидаємо
+        // Не губимо зміни: якщо новіших у черзі немає — повертаємо цей стан у
+        // чергу. (Новіший стан і так містить ці зміни, бо побудований поверх них.)
+        if (!pendingRef.current) pendingRef.current = target;
+        if (!hadSaveErrorRef.current) {
+          hadSaveErrorRef.current = true;
+          setBackupFeedback({
+            type: "error",
+            message: (error?.message || "Не вдалося зберегти зміни.") + " Повторюю автоматично — не закривайте сторінку."
+          });
+        }
+        const delay = retryDelayRef.current;
+        retryDelayRef.current = Math.min(delay * 2, 30000);
+        if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          scheduleFlush();
+        }, delay);
+        break;
+      }
     }
+    return allOk;
   };
+
+  const scheduleFlush = (): Promise<boolean> => {
+    if (!flushPromiseRef.current) {
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      flushPromiseRef.current = (async () => {
+        try {
+          return await sendPending();
+        } finally {
+          flushPromiseRef.current = null;
+        }
+      })();
+    }
+    return flushPromiseRef.current;
+  };
+
+  const saveStateToDisk = (updatedDb: DatabaseState): Promise<boolean> => {
+    commitDb(updatedDb);
+    pendingRef.current = updatedDb;
+    return scheduleFlush();
+  };
+
+  // Попередження при закритті/оновленні вкладки, поки є незбережені зміни.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (pendingRef.current || flushPromiseRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
 
   // TASK ACTIONS
 
@@ -600,6 +714,7 @@ export default function App() {
   };
 
   const handleAddTask = (taskData: Omit<Task, "id">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newTask: Task = {
       ...taskData,
       id: generateId("task")
@@ -664,6 +779,7 @@ export default function App() {
   };
 
   const handleToggleTaskStatus = (taskId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const task = db.tasks.find(t => t.id === taskId);
     if (!task) return;
 
@@ -695,6 +811,7 @@ export default function App() {
   };
 
   const handleSetTaskStatus = (taskId: string, newStatus: Task["status"]) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const task = db.tasks.find(t => t.id === taskId);
     if (!task) return;
 
@@ -718,6 +835,7 @@ export default function App() {
   };
 
   const handleDeleteTask = (taskId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const task = db.tasks.find(t => t.id === taskId);
     const updated = {
       ...db,
@@ -727,6 +845,7 @@ export default function App() {
   };
 
   const handleRestoreTask = (taskId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const task = db.tasks.find(t => t.id === taskId);
     const updated = {
       ...db,
@@ -736,6 +855,7 @@ export default function App() {
   };
 
   const handlePermanentlyDeleteTask = (taskId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const task = db.tasks.find(t => t.id === taskId);
     const updated = {
       ...db,
@@ -745,6 +865,7 @@ export default function App() {
   };
 
   const handleUpdateTask = (updatedTask: Task) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const prevTask = db.tasks.find(t => t.id === updatedTask.id);
     const updatedSuppliers = syncTaskStatusToSuppliers(updatedTask, db.suppliers || []);
     let updatedTasks = db.tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
@@ -759,6 +880,7 @@ export default function App() {
 
   // BULK TASK ACTIONS
   const handleBulkSetStatus = (taskIds: string[], newStatus: TaskStatus) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     if (taskIds.length === 0) return;
     let updatedTasks = db.tasks.map(t => taskIds.includes(t.id) ? { ...t, status: newStatus } : t);
     taskIds.forEach(id => {
@@ -778,6 +900,7 @@ export default function App() {
   };
 
   const handleBulkSetAssignee = (taskIds: string[], assigneeId: string | undefined) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     if (taskIds.length === 0) return;
     const updated = {
       ...db,
@@ -788,6 +911,7 @@ export default function App() {
   };
 
   const handleBulkDeleteTasks = (taskIds: string[]) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     if (taskIds.length === 0) return;
     const now = new Date().toISOString();
     const updated = {
@@ -799,6 +923,7 @@ export default function App() {
 
   // TASK TEMPLATE ACTIONS
   const handleAddTemplate = (data: Omit<TaskTemplate, "id">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newTemplate: TaskTemplate = { ...data, id: generateId("template") };
     const updated = {
       ...db,
@@ -808,6 +933,7 @@ export default function App() {
   };
 
   const handleDeleteTemplate = (id: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const template = (db.taskTemplates || []).find(t => t.id === id);
     const updated = {
       ...db,
@@ -818,6 +944,7 @@ export default function App() {
 
   // TRANSACTION ACTIONS
   const handleAddTransaction = (txData: Omit<Transaction, "id">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newTx: Transaction = {
       ...txData,
       id: generateId("tx")
@@ -830,6 +957,7 @@ export default function App() {
   };
 
   const handleUpdateTransaction = (updatedTx: Transaction) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const updated = {
       ...db,
       transactions: (db.transactions || []).map(tx => tx.id === updatedTx.id ? updatedTx : tx)
@@ -838,6 +966,7 @@ export default function App() {
   };
 
   const handleDeleteTransaction = (txId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const tx = (db.transactions || []).find(t => t.id === txId);
     const updated = {
       ...db,
@@ -847,6 +976,7 @@ export default function App() {
   };
 
   const handleRestoreTransaction = (txId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const tx = (db.transactions || []).find(t => t.id === txId);
     const updated = {
       ...db,
@@ -856,6 +986,7 @@ export default function App() {
   };
 
   const handlePermanentlyDeleteTransaction = (txId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const tx = (db.transactions || []).find(t => t.id === txId);
     const updated = {
       ...db,
@@ -866,6 +997,7 @@ export default function App() {
 
   // SUPPLIER ACTIONS
   const handleAddSupplier = (supData: Omit<Supplier, "id" | "isClosed" | "products">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newSup: Supplier = {
       ...supData,
       id: generateId("supplier"),
@@ -880,6 +1012,7 @@ export default function App() {
   };
 
   const handleToggleSupplierStatus = (supId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -897,6 +1030,7 @@ export default function App() {
   };
 
   const handleToggleSupplierLetsKeysLink = (supId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -914,6 +1048,7 @@ export default function App() {
   };
 
   const handleDeleteSupplier = (supId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -923,6 +1058,7 @@ export default function App() {
   };
 
   const handleRestoreSupplier = (supId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -932,6 +1068,7 @@ export default function App() {
   };
 
   const handlePermanentlyDeleteSupplier = (supId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -941,6 +1078,7 @@ export default function App() {
   };
 
   const handleAddProduct = (supId: string, prodData: Omit<ProductCard, "id">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newProd: ProductCard = {
       ...prodData,
       id: generateId("prod")
@@ -962,6 +1100,7 @@ export default function App() {
   };
 
   const handleAddProducts = (supId: string, prodsData: Omit<ProductCard, "id">[]) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const updated = {
       ...db,
@@ -983,6 +1122,7 @@ export default function App() {
   };
 
   const handleUpdateProduct = (supId: string, prodId: string, updatedProd: ProductCard) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const existingProd = supplier?.products?.find(p => p.id === prodId);
 
@@ -1018,6 +1158,7 @@ export default function App() {
   };
 
   const handleDeleteProduct = (supId: string, prodId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const prod = supplier?.products?.find(p => p.id === prodId);
     const updated = {
@@ -1036,6 +1177,7 @@ export default function App() {
   };
 
   const handleRestoreProduct = (supId: string, prodId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const prod = supplier?.products?.find(p => p.id === prodId);
     const updated = {
@@ -1054,6 +1196,7 @@ export default function App() {
   };
 
   const handlePermanentlyDeleteProduct = (supId: string, prodId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const prod = supplier?.products?.find(p => p.id === prodId);
     const updated = {
@@ -1086,7 +1229,10 @@ export default function App() {
     supplierId: string,
     jobs: { productId: number; productName: string; region: string; variations: LetsKeysVariation[] }[]
   ): Promise<{ addedCount: number; updatedCount: number; priceChangedCount: number; success: boolean }> => {
-    const supplier = db.suppliers.find(s => s.id === supplierId);
+    // Модалка синхронізації викликає це після довгого опитування LetsKeys — тож
+    // беремо найсвіжіший стан, а не той, що був, коли модалку відкрили.
+    const current = dbRef.current;
+    const supplier = current.suppliers.find(s => s.id === supplierId);
     if (!supplier) return { addedCount: 0, updatedCount: 0, priceChangedCount: 0, success: false };
 
     let addedCount = 0;
@@ -1181,8 +1327,8 @@ export default function App() {
       }
     });
 
-    const updatedSuppliers = db.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
-    const updated = { ...db, suppliers: updatedSuppliers };
+    const updatedSuppliers = current.suppliers.map(s => s.id === supplierId ? { ...s, products: updatedProducts } : s);
+    const updated = { ...current, suppliers: updatedSuppliers };
     const success = await saveStateToDisk(withLog(
       updated,
       "Синхронізував товари з LetsKeys",
@@ -1214,7 +1360,9 @@ export default function App() {
         return { success: false, message: data?.message || "Не вдалося знайти цей товар у Steam." };
       }
 
-      const existing = (db.steamWatches || []).find(w => w.packageId === data.packageId);
+      // Після очікування відповіді беремо НАЙСВІЖІШИЙ стан, а не той, що був на момент кліку.
+      const current = dbRef.current;
+      const existing = (current.steamWatches || []).find(w => w.packageId === data.packageId);
       if (existing) {
         return { success: true, watch: existing, alreadyExisted: true };
       }
@@ -1228,7 +1376,7 @@ export default function App() {
         prices: data.prices || []
       };
 
-      const updated = { ...db, steamWatches: [newWatch, ...(db.steamWatches || [])] };
+      const updated = { ...current, steamWatches: [newWatch, ...(current.steamWatches || [])] };
       const success = await saveStateToDisk(withLog(updated, "Додав товар у спостереження Steam", "product", newWatch.title));
       return { success, watch: success ? newWatch : undefined, message: success ? undefined : "Не вдалося зберегти." };
     } catch {
@@ -1244,10 +1392,24 @@ export default function App() {
   };
 
   const handleRemoveSteamWatch = (watchId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const watch = (db.steamWatches || []).find(w => w.id === watchId);
     if (!watch) return;
     const updated = { ...db, steamWatches: (db.steamWatches || []).filter(w => w.id !== watchId) };
     saveStateToDisk(withLog(updated, "Прибрав товар зі спостереження Steam", "product", watch.title));
+  };
+
+  // Сервер уже зберіг оновлений товар Steam — підставляємо його в найсвіжіший
+  // стан, а також у «підтверджений» і в чергу, щоб наступне збереження не
+  // відправило назад стару версію цього товару.
+  const applyServerSteamWatch = (watch: SteamWatchItem) => {
+    const replace = (state: DatabaseState): DatabaseState => ({
+      ...state,
+      steamWatches: (state.steamWatches || []).map(w => (w.packageId === watch.packageId ? watch : w))
+    });
+    commitDb(replace(dbRef.current));
+    if (lastAckedRef.current) lastAckedRef.current = replace(lastAckedRef.current);
+    if (pendingRef.current) pendingRef.current = replace(pendingRef.current);
   };
 
   const handleSyncSteamWatchNow = async (): Promise<boolean> => {
@@ -1272,11 +1434,7 @@ export default function App() {
       if (!res.ok || data.status !== "success") {
         return { success: false, message: data?.message || "Не вдалося оновити ціну." };
       }
-      const updated = {
-        ...db,
-        steamWatches: (db.steamWatches || []).map(w => (w.packageId === packageId ? data.watch : w))
-      };
-      setDb(updated);
+      applyServerSteamWatch(data.watch);
       return { success: true, changed: data.changed };
     } catch {
       return { success: false, message: "Не вдалося з'єднатися з сервером." };
@@ -1299,11 +1457,7 @@ export default function App() {
       if (!res.ok || data.status !== "success") {
         return { success: false, message: data?.message || "Не вдалося перевірити ціни через LetsKeys." };
       }
-      const updated = {
-        ...db,
-        steamWatches: (db.steamWatches || []).map(w => (w.packageId === packageId ? data.watch : w))
-      };
-      setDb(updated);
+      applyServerSteamWatch(data.watch);
       return { success: true, addedCount: data.addedCount, updatedCount: data.updatedCount };
     } catch {
       return { success: false, message: "Не вдалося з'єднатися з сервером." };
@@ -1313,6 +1467,7 @@ export default function App() {
   // --- Калькулятор цін ggsel -------------------------------------------------
 
   const handleAddGgselCategory = (name: string, defaultUsdToRubRate?: number) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const trimmed = name.trim();
     if (!trimmed) return;
     const newCat: GgselCategory = {
@@ -1326,6 +1481,7 @@ export default function App() {
   };
 
   const handleUpdateGgselCategoryRate = (categoryId: string, defaultUsdToRubRate: number | undefined) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const updated = {
       ...db,
       ggselCategories: (db.ggselCategories || []).map(c => (c.id === categoryId ? { ...c, defaultUsdToRubRate } : c))
@@ -1334,6 +1490,7 @@ export default function App() {
   };
 
   const handleRemoveGgselCategory = (categoryId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const cat = (db.ggselCategories || []).find(c => c.id === categoryId);
     if (!cat) return;
     const updated = {
@@ -1345,6 +1502,7 @@ export default function App() {
   };
 
   const handleAddGgselItem = (item: Omit<GgselWatchItem, "id" | "addedAt">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newItem: GgselWatchItem = { ...item, id: generateId("ggselitem"), addedAt: new Date().toISOString() };
     const updated = { ...db, ggselItems: [newItem, ...(db.ggselItems || [])] };
     saveStateToDisk(withLog(updated, "Додав товар у ggsel", "product", newItem.title));
@@ -1355,6 +1513,7 @@ export default function App() {
   // послідовних saveStateToDisk на тому самому "db" із замикання призвели б
   // до втрати частини доданих товарів.
   const handleAddGgselItems = (items: Omit<GgselWatchItem, "id" | "addedAt">[]) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     if (items.length === 0) return;
     const now = new Date().toISOString();
     const newItems: GgselWatchItem[] = items.map(item => ({ ...item, id: generateId("ggselitem"), addedAt: now }));
@@ -1363,6 +1522,7 @@ export default function App() {
   };
 
   const handleUpdateGgselItem = (itemId: string, patch: Partial<GgselWatchItem>) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const updated = {
       ...db,
       ggselItems: (db.ggselItems || []).map(i => (i.id === itemId ? { ...i, ...patch } : i))
@@ -1371,6 +1531,7 @@ export default function App() {
   };
 
   const handleUpdateGgselPrice = (itemId: string, newPrice: number) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
     const now = new Date().toISOString();
@@ -1406,6 +1567,7 @@ export default function App() {
       myMarginPercent: number;
     }
   ) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
     const now = new Date().toISOString();
@@ -1441,6 +1603,7 @@ export default function App() {
   };
 
   const handleRemoveGgselItem = (itemId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
     const updated = { ...db, ggselItems: (db.ggselItems || []).filter(i => i.id !== itemId) };
@@ -1448,6 +1611,7 @@ export default function App() {
   };
 
   const handleToggleGgselItemPaused = (itemId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
     const nowPaused = !item.isPaused;
@@ -1465,6 +1629,7 @@ export default function App() {
     item.sourceType === "catalog" ? `${item.categoryId}:catalog:${item.catalogProductId}` : `${item.categoryId}:steam:${item.steamPackageId}`;
 
   const handleSetMainNominal = (itemId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const item = (db.ggselItems || []).find(i => i.id === itemId);
     if (!item) return;
     const groupKey = ggselGroupKey(item);
@@ -1483,6 +1648,7 @@ export default function App() {
   // об'єднаній картці ggsel) — оновлюємо на всіх номіналах групи одним
   // запитом, щоб уникнути застарілого замикання.
   const handleUpdateGgselGroupTitle = (itemIds: string[], newTitle: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const trimmed = newTitle.trim();
     if (!trimmed) return;
     const idSet = new Set(itemIds);
@@ -1494,6 +1660,7 @@ export default function App() {
   };
 
   const handleToggleProductAdded = (supId: string, prodId: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const supplier = (db.suppliers || []).find(s => s.id === supId);
     const targetProd = supplier?.products?.find(p => p.id === prodId);
     if (!targetProd) return;
@@ -1551,6 +1718,7 @@ export default function App() {
 
   // BUDGET ACTIONS
   const handleAddBudget = (data: Omit<BudgetPlan, "id">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newBudget: BudgetPlan = { ...data, id: generateId("budget") };
     const updated = {
       ...db,
@@ -1566,6 +1734,7 @@ export default function App() {
   };
 
   const handleAddAccount = (name: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const clean = name.trim();
     if (!clean) return;
     const newAccount: FinanceAccount = {
@@ -1588,6 +1757,7 @@ export default function App() {
   };
 
   const handleDeleteAccount = (id: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     // Захист: не видаляємо рахунок, поки на ньому є операції.
     const hasTx = (db.transactions || []).some(t => t.accountId === id);
     if (hasTx) return;
@@ -1606,6 +1776,7 @@ export default function App() {
   };
 
   const handleAddTransactionTemplate = (data: Omit<TransactionTemplate, "id" | "ownerUserId" | "createdAt">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newTemplate: TransactionTemplate = {
       ...data,
       id: generateId("txtpl"),
@@ -1626,6 +1797,7 @@ export default function App() {
   };
 
   const handleDeleteTransactionTemplate = (id: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const tpl = (db.transactionTemplates || []).find(t => t.id === id);
     const updated = {
       ...db,
@@ -1640,6 +1812,7 @@ export default function App() {
   };
 
   const handleAddOrder = (data: Omit<ProblemOrder, "id" | "createdAt" | "createdBy">) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const newOrder: ProblemOrder = {
       ...data,
       id: generateId("order"),
@@ -1657,6 +1830,7 @@ export default function App() {
   };
 
   const handleUpdateOrder = (id: string, data: Partial<ProblemOrder>) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const updated = {
       ...db,
       orders: (db.orders || []).map(o => o.id === id ? { ...o, ...data } : o)
@@ -1672,6 +1846,7 @@ export default function App() {
   };
 
   const handleDeleteOrder = (id: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const o = (db.orders || []).find(x => x.id === id);
     const updated = { ...db, orders: (db.orders || []).filter(x => x.id !== id) };
     saveStateToDisk(withLog(
@@ -1683,6 +1858,7 @@ export default function App() {
   };
 
   const handleDeleteBudget = (id: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const budget = (db.budgets || []).find(b => b.id === id);
     const updated = {
       ...db,
@@ -1693,11 +1869,13 @@ export default function App() {
 
   // CURRENCY RATES
   const handleUpdateCurrencyRates = (rates: Record<string, number>) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const updated = { ...db, currencyRates: { ...rates, [db.baseCurrency]: 1 } };
     saveStateToDisk(withLog(updated, "Оновив курси валют", "budget", "Налаштування валют"));
   };
 
   const handleSetBaseCurrency = (currency: string) => {
+    const db = dbRef.current; // найсвіжіший стан (навіть якщо ще не відрендерений)
     const code = currency.trim().toUpperCase();
     if (!code || code === db.baseCurrency) return;
     // Keep the old base currency in the rate table (its rate relative to the
@@ -1772,7 +1950,11 @@ export default function App() {
     if (kept.length === items.length) return; // нема що прибирати
     if (kept.length === 0) return; // запобіжник: не прибираємо геть усе автоматично
 
-    saveStateToDisk({ ...db, ggselItems: kept });
+    // Беремо найсвіжіший стан (могли бути незакомічені в рендер зміни).
+    const latest = dbRef.current;
+    const latestKept = (latest.ggselItems || []).filter(i => !isOrphan(i));
+    if (latestKept.length === (latest.ggselItems || []).length || latestKept.length === 0) return;
+    saveStateToDisk({ ...latest, ggselItems: latestKept });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db.ggselItems, visibleSuppliers, isAuthenticated]);
 

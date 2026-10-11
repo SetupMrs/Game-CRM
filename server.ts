@@ -462,7 +462,9 @@ function readDb() {
   const result: any = {};
   for (const key of DB_ARRAY_KEYS) {
     const table = TABLE_BY_KEY[key];
-    const rows = sqlite.prepare(`SELECT data FROM ${table}`).all() as { data: string }[];
+    // Явний порядок за rowid: саме він відображає порядок записів у застосунку
+    // (нові записи, які клієнт додає «на початок», отримують менший rowid).
+    const rows = sqlite.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all() as { data: string }[];
     result[key] = rows.map(r => {
       try { return JSON.parse(r.data); } catch { return null; }
     }).filter(Boolean);
@@ -585,6 +587,168 @@ function writeDb(data: any, allowEmptyWipe = false): { success: boolean; blocked
     console.error("Error writing to SQLite database", error);
     return { success: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Збереження «по рядках» (ops) — замість перезапису всієї бази.
+//
+// Раніше кожне збереження (і кожна фонова синхронізація) перезаписувало ВСІ
+// таблиці знімком стану. Якщо знімок був старий (синхронізація триває
+// 10–40 хв; два збереження прийшли не в тому порядку; дві вкладки чи двоє
+// людей) — свіжі записи інших просто зникали.
+//
+// Тепер змінюються лише конкретні рядки: upsert (вставити/оновити за id) і
+// delete (видалити за id). Рядків, про які запит не згадує, ніхто не чіпає.
+// Уся операція — одна атомарна транзакція SQLite.
+// ---------------------------------------------------------------------------
+type CollectionOps = {
+  upsert?: any[];     // записи для вставки/оновлення (за полем id)
+  delete?: string[];  // id записів для видалення
+  prepend?: string[]; // id НОВИХ записів, які клієнт поставив на початок списку
+};
+type DbOps = Partial<Record<(typeof DB_ARRAY_KEYS)[number], CollectionOps>>;
+type SettingsPatch = { baseCurrency?: string; currencyRates?: Record<string, number> };
+
+const SERVER_MAX_ACTIVITY_LOG = 300;
+const OPS_BACKUP_INTERVAL_MS = 10 * 60 * 1000; // бекап при збереженнях — не частіше ніж раз на 10 хв
+let lastOpsBackupAt = 0;
+
+function isDbArrayKey(key: string): key is (typeof DB_ARRAY_KEYS)[number] {
+  return (DB_ARRAY_KEYS as readonly string[]).includes(key);
+}
+
+function productsCount(row: any): number {
+  return Array.isArray(row?.products) ? row.products.length : 0;
+}
+
+// Захист від масового стирання (аналог findSuspiciousWipes для ops).
+function findSuspiciousOps(ops: DbOps): string[] {
+  const suspicious: string[] = [];
+  for (const key of Object.keys(ops)) {
+    if (!isDbArrayKey(key)) continue;
+    const table = TABLE_BY_KEY[key];
+    const op = ops[key] || {};
+    const upserts = Array.isArray(op.upsert) ? op.upsert : [];
+    const deletes = Array.isArray(op.delete) ? op.delete : [];
+    if (deletes.length === 0) continue;
+    const currentCount = (sqlite.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number }).c;
+    const existsStmt = sqlite.prepare(`SELECT 1 FROM ${table} WHERE id = ?`);
+    const existingDeletes = deletes.filter(id => existsStmt.get(id)).length;
+    // Стерти ВСІ записи колекції (більше одного) одним запитом без жодної
+    // вставки — майже напевно помилка/застарілий стан, а не дія користувача.
+    if (currentCount > 1 && existingDeletes >= currentCount && upserts.length === 0) {
+      suspicious.push(key);
+    }
+  }
+
+  // Постачальники: товари всередині рядка не повинні «обнулитись» зі старого стану.
+  const supOps = ops.suppliers;
+  if (supOps && Array.isArray(supOps.upsert)) {
+    const getRow = sqlite.prepare("SELECT data FROM suppliers WHERE id = ?");
+    for (const incoming of supOps.upsert) {
+      if (!incoming || typeof incoming.id !== "string") continue;
+      const row = getRow.get(incoming.id) as { data: string } | undefined;
+      if (!row) continue;
+      let existing: any = null;
+      try { existing = JSON.parse(row.data); } catch { continue; }
+      if (productsCount(existing) >= 2 && productsCount(incoming) === 0) {
+        suspicious.push("suppliers.products");
+        break;
+      }
+    }
+  }
+  return suspicious;
+}
+
+const applyDbOpsTxn = sqlite.transaction((ops: DbOps, settings: SettingsPatch | null) => {
+  for (const key of Object.keys(ops)) {
+    if (!isDbArrayKey(key)) continue;
+    const table = TABLE_BY_KEY[key];
+    const op = ops[key] || {};
+    const upserts = (Array.isArray(op.upsert) ? op.upsert : []).filter(
+      (item: any) => item && typeof item === "object" && typeof item.id === "string" && item.id
+    );
+    const deletes = (Array.isArray(op.delete) ? op.delete : []).filter(id => typeof id === "string");
+    const prependIds = new Set((Array.isArray(op.prepend) ? op.prepend : []).filter(id => typeof id === "string"));
+
+    const del = sqlite.prepare(`DELETE FROM ${table} WHERE id = ?`);
+    for (const id of deletes) del.run(id);
+
+    // ON CONFLICT ... DO UPDATE зберігає rowid (тобто позицію запису в списку).
+    const upsertStmt = sqlite.prepare(
+      `INSERT INTO ${table} (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+    );
+    const upsertAtStmt = sqlite.prepare(
+      `INSERT INTO ${table} (rowid, id, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+    );
+
+    // Нові записи «на початок»: даємо їм rowid менший за мінімальний, зберігаючи
+    // їхній відносний порядок (ідемо з кінця групи).
+    const prependItems = upserts.filter((item: any) => prependIds.has(item.id));
+    if (prependItems.length > 0) {
+      const minRow = (sqlite.prepare(`SELECT MIN(rowid) as m FROM ${table}`).get() as { m: number | null }).m;
+      let nextRow = (typeof minRow === "number" ? minRow : 1) - 1;
+      for (let i = prependItems.length - 1; i >= 0; i--) {
+        const item = prependItems[i];
+        upsertAtStmt.run(nextRow, item.id, JSON.stringify(item));
+        nextRow -= 1;
+      }
+    }
+    for (const item of upserts) {
+      if (prependIds.has(item.id)) continue;
+      upsertStmt.run(item.id, JSON.stringify(item));
+    }
+
+    // Журнал дій не росте безмежно: лишаємо найновіші (на початку списку).
+    if (key === "activityLog") {
+      sqlite.prepare(
+        `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} ORDER BY rowid ASC LIMIT -1 OFFSET ?)`
+      ).run(SERVER_MAX_ACTIVITY_LOG);
+    }
+  }
+
+  if (settings) {
+    if (typeof settings.baseCurrency === "string" || settings.currencyRates) {
+      const currentBaseRow = sqlite.prepare("SELECT value FROM settings WHERE key = 'baseCurrency'").get() as { value: string } | undefined;
+      const baseCurrency = normalizeBaseCurrency(settings.baseCurrency ?? currentBaseRow?.value);
+      sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('baseCurrency', ?)").run(baseCurrency);
+      if (settings.currencyRates) {
+        const currencyRates = normalizeCurrencyRates(settings.currencyRates, baseCurrency);
+        sqlite.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('currencyRates', ?)").run(JSON.stringify(currencyRates));
+      }
+    }
+  }
+});
+
+function applyDbOps(
+  ops: DbOps,
+  settings: SettingsPatch | null = null,
+  options: { force?: boolean } = {}
+): { success: boolean; blockedCollections?: string[] } {
+  try {
+    if (!options.force) {
+      const suspicious = findSuspiciousOps(ops);
+      if (suspicious.length > 0) {
+        console.warn("Blocked ops that would have wiped data:", suspicious.join(", "));
+        return { success: false, blockedCollections: suspicious };
+      }
+    }
+    const now = Date.now();
+    if (now - lastOpsBackupAt > OPS_BACKUP_INTERVAL_MS) {
+      createBackupSnapshot();
+      lastOpsBackupAt = now;
+    }
+    applyDbOpsTxn(ops, settings);
+    return { success: true };
+  } catch (error) {
+    console.error("Error applying DB ops", error);
+    return { success: false };
+  }
+}
+
+// Зручний помічник для серверних процесів: додати запис у журнал дій.
+function activityLogOps(entry: any): CollectionOps {
+  return { upsert: [entry], prepend: [entry.id] };
 }
 
 // One-time migration: if an old data/crm_srm_db.json file exists (from
@@ -738,6 +902,48 @@ app.post("/api/db", requireAuth, (req, res) => {
   }
 });
 
+// Save only changed rows (див. applyDbOps). Основний спосіб збереження для
+// актуального клієнта — шле лише змінені записи, а не всю базу.
+app.post("/api/db/ops", requireAuth, (req, res) => {
+  const body = req.body || {};
+  const rawOps = body.ops;
+  if (!rawOps || typeof rawOps !== "object" || Array.isArray(rawOps)) {
+    return res.status(400).json({ status: "error", message: "Невірний формат змін." });
+  }
+  const ops: DbOps = {};
+  for (const key of Object.keys(rawOps)) {
+    if (!isDbArrayKey(key)) {
+      return res.status(400).json({ status: "error", message: `Невідома колекція: ${key}` });
+    }
+    const op = rawOps[key];
+    if (!op || typeof op !== "object") continue;
+    if (op.upsert !== undefined && !Array.isArray(op.upsert)) {
+      return res.status(400).json({ status: "error", message: `Невірний формат upsert у ${key}` });
+    }
+    if (op.delete !== undefined && !Array.isArray(op.delete)) {
+      return res.status(400).json({ status: "error", message: `Невірний формат delete у ${key}` });
+    }
+    ops[key] = { upsert: op.upsert, delete: op.delete, prepend: Array.isArray(op.prepend) ? op.prepend : undefined };
+  }
+  const settings: SettingsPatch | null =
+    body.settings && typeof body.settings === "object"
+      ? { baseCurrency: body.settings.baseCurrency, currencyRates: body.settings.currencyRates }
+      : null;
+
+  const result = applyDbOps(ops, settings, { force: req.query.force === "true" });
+  if (result.success) {
+    res.json({ status: "success" });
+  } else if (result.blockedCollections) {
+    res.status(409).json({
+      status: "error",
+      message: `Запис заблоковано: спроба видалити всі записи в: ${result.blockedCollections.join(", ")}. Якщо це справді навмисно — повторіть дію ще раз.`,
+      blockedCollections: result.blockedCollections
+    });
+  } else {
+    res.status(500).json({ status: "error", message: "Не вдалося зберегти зміни." });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // LetsKeys "Steam Gift" price probe — заповнює регіони (напр. RU), яких
 // офіційний Steam Store API не видає для конкретної гри взагалі, але які
@@ -797,9 +1003,10 @@ app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req,
     return res.status(400).json({ status: "error", message: "LETSKEYS_API_KEY не налаштовано в .env на сервері." });
   }
 
-  const db = readDb();
-  const watch = (db.steamWatches || []).find((w: any) => w.packageId === packageId);
-  if (!watch) {
+  // Перевіряємо наявність товару, але НЕ тримаємо знімок бази на час очікування
+  // LetsKeys (до ~30 с) — інакше затерли б зміни, внесені за цей час.
+  const snapshotWatch = (readDb().steamWatches || []).find((w: any) => w.packageId === packageId);
+  if (!snapshotWatch) {
     return res.status(404).json({ status: "error", message: "Товар не знайдено у спостереженні." });
   }
 
@@ -809,6 +1016,13 @@ app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req,
       status: "error",
       message: "LetsKeys не зміг перевірити ціни для цього товару (можливо, гра недоступна в жодному регіоні, або перевірка не завершилась вчасно — спробуй ще раз)."
     });
+  }
+
+  // Синхронно: свіже читання → злиття → запис лише цього товару.
+  const fresh = readDb();
+  const watch = (fresh.steamWatches || []).find((w: any) => w.packageId === packageId);
+  if (!watch) {
+    return res.status(404).json({ status: "error", message: "Товар прибрали зі спостереження під час перевірки." });
   }
 
   const now = new Date().toISOString();
@@ -838,7 +1052,7 @@ app.post("/api/steam-watch/fill-missing-with-letskeys", requireAuth, async (req,
   }
   watch.lastSyncedAt = now;
 
-  const writeResult = writeDb(db, false);
+  const writeResult = applyDbOps({ steamWatches: { upsert: [watch] } });
   if (!writeResult.success) {
     return res.status(500).json({ status: "error", message: "Не вдалося зберегти оновлений товар." });
   }
@@ -876,6 +1090,67 @@ async function fetchLetsKeysVariationsRaw(productId: string, region: string, api
 
 let isAutoSyncRunning = false;
 
+// Зливає варіації LetsKeys у товар (мутує переданий product). Повертає, чи
+// щось змінилось і скільки цін змінилось. Логіка та сама, що була всередині
+// синхронізації, лише винесена окремо.
+function mergeLetsKeysVariationsIntoProduct(product: any, variations: any[], now: string): { changed: boolean; priceChanged: number } {
+  const itemByExternalId: Record<string, any> = {};
+  (product.items || []).forEach((item: any) => {
+    if (item.externalVariationId) itemByExternalId[item.externalVariationId] = item;
+  });
+
+  const mergedItems = [...(product.items || [])];
+  let changed = false;
+  let priceChanged = 0;
+
+  variations.forEach((v: any) => {
+    const extId = String(v.id);
+    const existingItem = itemByExternalId[extId];
+
+    if (existingItem) {
+      const priceDiffers = typeof existingItem.price === "number" && existingItem.price !== v.price;
+      const stockChanged = existingItem.externalInStock !== v.in_stock;
+      if (priceDiffers || stockChanged) {
+        const idx = mergedItems.findIndex((i: any) => i.id === existingItem.id);
+        const updatedItem: any = { ...existingItem, externalInStock: v.in_stock, lastSyncedAt: now };
+        if (priceDiffers) {
+          const historyEntry = {
+            id: crypto.randomUUID(),
+            price: existingItem.price,
+            currency: existingItem.currency,
+            changedAt: now
+          };
+          updatedItem.price = v.price;
+          updatedItem.priceHistory = [historyEntry, ...(existingItem.priceHistory || [])].slice(0, 50);
+          priceChanged++;
+        }
+        mergedItems[idx] = updatedItem;
+        changed = true;
+      }
+    } else {
+      mergedItems.push({
+        id: crypto.randomUUID(),
+        code: extId,
+        title: v.name,
+        price: v.price,
+        currency: "USD",
+        status: "Available",
+        createdAt: now,
+        externalVariationId: extId,
+        externalInStock: v.in_stock,
+        lastSyncedAt: now
+      });
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    product.items = mergedItems;
+    product.lastSyncedAt = now;
+  }
+  return { changed, priceChanged };
+}
+
 async function runLetsKeysAutoSync() {
   if (isAutoSyncRunning) {
     console.log("[AutoSync] Попередній запуск ще триває, пропускаю.");
@@ -889,17 +1164,18 @@ async function runLetsKeysAutoSync() {
 
   isAutoSyncRunning = true;
   try {
-    const db = readDb();
-    const linkedSuppliers = (db.suppliers || []).filter((s: any) => s.letsKeysLinked && !s.deletedAt);
+    // Знімок потрібен лише щоб знати, ЩО опитувати. Записуємо ми потім у СВІЖУ
+    // базу — бо опитування триває хвилинами, і за цей час користувачі вносять
+    // зміни (фінанси, завдання…), які не можна затерти старим знімком.
+    const snapshot = readDb();
+    const linkedSuppliers = (snapshot.suppliers || []).filter((s: any) => s.letsKeysLinked && !s.deletedAt);
     if (linkedSuppliers.length === 0) {
       console.log("[AutoSync] Немає постачальників, прив'язаних до LetsKeys — пропущено.");
       return;
     }
 
-    const now = new Date().toISOString();
-    let productsUpdated = 0;
-    let priceChangedCount = 0;
     let failedCount = 0;
+    const fetched: { supplierId: string; productId: string; externalProductId: string; externalRegion: string; variations: any[] }[] = [];
 
     console.log(`[AutoSync] Початок фонової синхронізації цін LetsKeys (${linkedSuppliers.length} постачальник(ів))...`);
 
@@ -915,79 +1191,57 @@ async function runLetsKeysAutoSync() {
           failedCount++;
           continue;
         }
-
-        const itemByExternalId: Record<string, any> = {};
-        (product.items || []).forEach((item: any) => {
-          if (item.externalVariationId) itemByExternalId[item.externalVariationId] = item;
+        fetched.push({
+          supplierId: supplier.id,
+          productId: product.id,
+          externalProductId: String(product.externalProductId),
+          externalRegion: String(product.externalRegion),
+          variations
         });
+      }
+    }
 
-        const mergedItems = [...(product.items || [])];
-        let productChanged = false;
+    // --- Далі все синхронно (без await): читаємо свіжу базу й одразу пишемо.
+    // Між читанням і записом ніхто не встигне нічого змінити.
+    const now = new Date().toISOString();
+    const fresh = readDb();
+    const changedSuppliers = new Map<string, any>();
+    let productsUpdated = 0;
+    let priceChangedCount = 0;
 
-        variations.forEach((v: any) => {
-          const extId = String(v.id);
-          const existingItem = itemByExternalId[extId];
-
-          if (existingItem) {
-            const priceChanged = typeof existingItem.price === "number" && existingItem.price !== v.price;
-            const stockChanged = existingItem.externalInStock !== v.in_stock;
-            if (priceChanged || stockChanged) {
-              const idx = mergedItems.findIndex((i: any) => i.id === existingItem.id);
-              const updatedItem: any = { ...existingItem, externalInStock: v.in_stock, lastSyncedAt: now };
-              if (priceChanged) {
-                const historyEntry = {
-                  id: crypto.randomUUID(),
-                  price: existingItem.price,
-                  currency: existingItem.currency,
-                  changedAt: now
-                };
-                updatedItem.price = v.price;
-                updatedItem.priceHistory = [historyEntry, ...(existingItem.priceHistory || [])].slice(0, 50);
-                priceChangedCount++;
-              }
-              mergedItems[idx] = updatedItem;
-              productChanged = true;
-            }
-          } else {
-            mergedItems.push({
-              id: crypto.randomUUID(),
-              code: extId,
-              title: v.name,
-              price: v.price,
-              currency: "USD",
-              status: "Available",
-              createdAt: now,
-              externalVariationId: extId,
-              externalInStock: v.in_stock,
-              lastSyncedAt: now
-            });
-            productChanged = true;
-          }
-        });
-
-        if (productChanged) {
-          product.items = mergedItems;
-          product.lastSyncedAt = now;
-          productsUpdated++;
-        }
+    for (const f of fetched) {
+      const supplier = (fresh.suppliers || []).find((s: any) => s.id === f.supplierId);
+      if (!supplier || supplier.deletedAt || !supplier.letsKeysLinked) continue;
+      const product = (supplier.products || []).find(
+        (p: any) =>
+          p.id === f.productId &&
+          !p.deletedAt &&
+          String(p.externalProductId) === f.externalProductId &&
+          String(p.externalRegion) === f.externalRegion
+      );
+      if (!product) continue; // товар видалили/змінили під час синхронізації — не чіпаємо
+      const result = mergeLetsKeysVariationsIntoProduct(product, f.variations, now);
+      if (result.changed) {
+        productsUpdated++;
+        priceChangedCount += result.priceChanged;
+        changedSuppliers.set(supplier.id, supplier);
       }
     }
 
     if (productsUpdated > 0) {
-      db.activityLog = [
-        {
-          id: crypto.randomUUID(),
-          timestamp: now,
-          actorName: "Автосинхронізація",
-          action: "Оновив ціни з LetsKeys (автоматично)",
-          entityType: "product",
-          entityTitle: `${productsUpdated} товар(ів)`,
-          details: `Зміна ціни: ${priceChangedCount}${failedCount > 0 ? `, помилок: ${failedCount}` : ""}`
-        },
-        ...(db.activityLog || [])
-      ].slice(0, 300);
-
-      const result = writeDb(db, false);
+      const entry = {
+        id: crypto.randomUUID(),
+        timestamp: now,
+        actorName: "Автосинхронізація",
+        action: "Оновив ціни з LetsKeys (автоматично)",
+        entityType: "product",
+        entityTitle: `${productsUpdated} товар(ів)`,
+        details: `Зміна ціни: ${priceChangedCount}${failedCount > 0 ? `, помилок: ${failedCount}` : ""}`
+      };
+      const result = applyDbOps({
+        suppliers: { upsert: Array.from(changedSuppliers.values()) },
+        activityLog: activityLogOps(entry)
+      });
       if (!result.success) {
         console.warn("[AutoSync] Запис заблоковано або не вдався:", result.blockedCollections || "невідома причина");
       } else {
@@ -1241,6 +1495,13 @@ async function refreshOneSteamWatch(watch: any, now: string): Promise<{ changed:
     }
   }
 
+  // Регіони, яких немає в нашому списку країн Steam (напр. "cis", доданий через
+  // LetsKeys), Steam не оновлює — але й видаляти їх не можна. Лишаємо як є.
+  const steamCountryCodes = new Set(STEAM_WATCH_COUNTRIES.map(c => c.code));
+  for (const entry of (watch.prices || [])) {
+    if (!steamCountryCodes.has(entry.countryCode)) updatedPrices.push(entry);
+  }
+
   const currentOrder = (watch.prices || []).map((e: any) => e.countryCode).join(",");
   const newOrder = updatedPrices.map((e: any) => e.countryCode).join(",");
   if (newOrder !== currentOrder) watchChanged = true;
@@ -1253,6 +1514,17 @@ async function refreshOneSteamWatch(watch: any, now: string): Promise<{ changed:
   return { changed: watchChanged, priceChangedCount };
 }
 
+// Переносить результат оновлення цін Steam (зробленого на знімку) у СВІЖИЙ
+// запис товару: ціни країн Steam — з оновлення, решта регіонів (напр. додані
+// через LetsKeys під час оновлення) — зі свіжої бази.
+function applySteamRefreshToFreshWatch(fresh: any, refreshed: any) {
+  const steamCountryCodes = new Set(STEAM_WATCH_COUNTRIES.map(c => c.code));
+  const refreshedSteam = (refreshed.prices || []).filter((p: any) => steamCountryCodes.has(p.countryCode));
+  const freshOther = (fresh.prices || []).filter((p: any) => !steamCountryCodes.has(p.countryCode));
+  fresh.prices = [...refreshedSteam, ...freshOther];
+  fresh.lastSyncedAt = refreshed.lastSyncedAt;
+}
+
 async function runSteamWatchAutoSync() {
   if (isSteamWatchSyncRunning) {
     console.log("[SteamWatch] Попередній запуск ще триває, пропускаю.");
@@ -1260,8 +1532,9 @@ async function runSteamWatchAutoSync() {
   }
   isSteamWatchSyncRunning = true;
   try {
-    const db = readDb();
-    const watches: any[] = (db.steamWatches || []);
+    // Опитуємо Steam на знімку, а записуємо у свіжу базу (див. LetsKeys-синхронізацію).
+    const snapshot = readDb();
+    const watches: any[] = (snapshot.steamWatches || []);
     if (watches.length === 0) {
       console.log("[SteamWatch] Список спостереження порожній — пропущено.");
       return;
@@ -1269,35 +1542,44 @@ async function runSteamWatchAutoSync() {
 
     const now = new Date().toISOString();
     let priceChangedCount = 0;
-    let itemsTouched = 0;
+    const refreshedWatches: any[] = [];
 
     console.log(`[SteamWatch] Початок синхронізації цін Steam (${watches.length} товар(ів))...`);
 
     for (const watch of watches) {
       const result = await refreshOneSteamWatch(watch, now);
-      if (result.changed) itemsTouched++;
+      if (result.changed) refreshedWatches.push(watch);
       priceChangedCount += result.priceChangedCount;
     }
 
-    if (itemsTouched > 0) {
-      db.activityLog = [
-        {
-          id: crypto.randomUUID(),
-          timestamp: now,
-          actorName: "Автосинхронізація",
-          action: "Оновив ціни Steam (автоматично)",
-          entityType: "product",
-          entityTitle: `${itemsTouched} товар(ів)`,
-          details: `Зміна ціни: ${priceChangedCount}`
-        },
-        ...(db.activityLog || [])
-      ].slice(0, 300);
+    // Синхронно: свіже читання → застосування → запис лише змінених товарів.
+    const fresh = readDb();
+    const changedFresh: any[] = [];
+    for (const refreshed of refreshedWatches) {
+      const freshWatch = (fresh.steamWatches || []).find((w: any) => w.packageId === refreshed.packageId);
+      if (!freshWatch) continue; // товар прибрали зі спостереження під час оновлення
+      applySteamRefreshToFreshWatch(freshWatch, refreshed);
+      changedFresh.push(freshWatch);
+    }
 
-      const result = writeDb(db, false);
+    if (changedFresh.length > 0) {
+      const entry = {
+        id: crypto.randomUUID(),
+        timestamp: now,
+        actorName: "Автосинхронізація",
+        action: "Оновив ціни Steam (автоматично)",
+        entityType: "product",
+        entityTitle: `${changedFresh.length} товар(ів)`,
+        details: `Зміна ціни: ${priceChangedCount}`
+      };
+      const result = applyDbOps({
+        steamWatches: { upsert: changedFresh },
+        activityLog: activityLogOps(entry)
+      });
       if (!result.success) {
         console.warn("[SteamWatch] Запис заблоковано або не вдався:", result.blockedCollections || "невідома причина");
       } else {
-        console.log(`[SteamWatch] Готово. Оновлено товарів: ${itemsTouched}, зміна ціни: ${priceChangedCount}.`);
+        console.log(`[SteamWatch] Готово. Оновлено товарів: ${changedFresh.length}, зміна ціни: ${priceChangedCount}.`);
       }
     } else {
       console.log("[SteamWatch] Готово, змін немає.");
@@ -1326,22 +1608,29 @@ app.post("/api/steam-watch/sync-one", requireAuth, async (req, res) => {
   }
   isSteamWatchSyncRunning = true;
   try {
-    const db = readDb();
-    const watch = (db.steamWatches || []).find((w: any) => w.packageId === packageId);
+    const snapshot = readDb();
+    const watch = (snapshot.steamWatches || []).find((w: any) => w.packageId === packageId);
     if (!watch) {
       return res.status(404).json({ status: "error", message: "Товар не знайдено у спостереженні." });
     }
     const now = new Date().toISOString();
     const result = await refreshOneSteamWatch(watch, now);
 
+    // Після очікування — свіже читання і запис лише цього товару.
+    const fresh = readDb();
+    const freshWatch = (fresh.steamWatches || []).find((w: any) => w.packageId === packageId);
+    if (!freshWatch) {
+      return res.status(404).json({ status: "error", message: "Товар прибрали зі спостереження під час оновлення." });
+    }
     if (result.changed) {
-      const writeResult = writeDb(db, false);
+      applySteamRefreshToFreshWatch(freshWatch, watch);
+      const writeResult = applyDbOps({ steamWatches: { upsert: [freshWatch] } });
       if (!writeResult.success) {
         return res.status(500).json({ status: "error", message: "Не вдалося зберегти оновлену ціну." });
       }
     }
 
-    res.json({ status: "success", changed: result.changed, priceChangedCount: result.priceChangedCount, watch });
+    res.json({ status: "success", changed: result.changed, priceChangedCount: result.priceChangedCount, watch: freshWatch });
   } catch (error) {
     console.error("[SteamWatch] sync-one failed:", error);
     res.status(500).json({ status: "error", message: "Не вдалося оновити ціну." });
